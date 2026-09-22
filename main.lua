@@ -25,9 +25,7 @@ Event.OnClientEvent:Connect(function(
     end
 
 
-    --// Creative Trap
-    --// Impact Shot / Explosive Kick
-
+    -- Creative Trap
     if player ~= LocalPlayer
         and action == "Hold"
         and (
@@ -43,27 +41,10 @@ Event.OnClientEvent:Connect(function(
     end
 
 
-    --// Black Hole Trap
-    --// Impact Bicycle
-
-    if player ~= LocalPlayer
-        and action == "HoldSkill"
-        and skill == "Impact Bicycle" then
-
-        Event:FireServer(
-            "UseSkill",
-            "Black Hole Trap"
-        )
-
-    end
-
-
-    --// Black Hole Trap
-    --// Snake Jump
-
+    -- Black Hole Trap
     if player ~= LocalPlayer
         and action == "UseSkill"
-        and skill == "Snake Jump" then
+        and skill == "Impact Bicycle" then
 
         Event:FireServer(
             "UseSkill",
@@ -113,7 +94,7 @@ UserInputService.InputBegan:Connect(function(
     end
 
 
-    -- Don't toggle while typing
+    -- Don't activate while typing
     if UserInputService:GetFocusedTextBox() then
         return
     end
