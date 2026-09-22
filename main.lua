@@ -75,7 +75,7 @@ local autoTrap = tab:CreateToggle({
 
     name = "Auto Trap",
 
-    description = "Automatically activates Creative Trap and Black Hole Trap.",
+    description = "Automatically activates Creative Trap and Black Hole Trap. Keybind: F",
 
     flag = "AutoTrap",
 
