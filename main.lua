@@ -1,14 +1,3 @@
-local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
-
-local window = Rayfield:CreateWindow({
-    name = "Sora Hub",
-    subtitle = "fuck u mamaguevo",
-    sidebarLayout = true,
-    theme = "cobalt",
-})
-
-local tab = window:CreateTab({ name = "the good stuff", icon = 93364949241311 })
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -36,7 +25,9 @@ Event.OnClientEvent:Connect(function(
     end
 
 
-    -- Creative Trap
+    --// Creative Trap
+    --// Impact Shot / Explosive Kick
+
     if player ~= LocalPlayer
         and action == "Hold"
         and (
@@ -52,10 +43,27 @@ Event.OnClientEvent:Connect(function(
     end
 
 
-    -- Black Hole Trap
+    --// Black Hole Trap
+    --// Impact Bicycle
+
     if player ~= LocalPlayer
         and action == "UseSkill"
         and skill == "Impact Bicycle" then
+
+        Event:FireServer(
+            "UseSkill",
+            "Black Hole Trap"
+        )
+
+    end
+
+
+    --// Black Hole Trap
+    --// Snake Jump
+
+    if player ~= LocalPlayer
+        and action == "UseSkill"
+        and skill == "Snake Jump" then
 
         Event:FireServer(
             "UseSkill",
@@ -75,7 +83,7 @@ local autoTrap = tab:CreateToggle({
 
     name = "Auto Trap",
 
-    description = "Automatically activates Creative Trap and Black Hole Trap. Keybind: F",
+    description = "Automatically activates Creative Trap and Black Hole Trap.",
 
     flag = "AutoTrap",
 
@@ -105,7 +113,7 @@ UserInputService.InputBegan:Connect(function(
     end
 
 
-    -- Don't activate while typing
+    -- Don't toggle while typing
     if UserInputService:GetFocusedTextBox() then
         return
     end
