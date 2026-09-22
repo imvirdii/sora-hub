@@ -47,7 +47,7 @@ Event.OnClientEvent:Connect(function(
     --// Impact Bicycle
 
     if player ~= LocalPlayer
-        and action == "UseSkill"
+        and action == "HoldSkill"
         and skill == "Impact Bicycle" then
 
         Event:FireServer(
