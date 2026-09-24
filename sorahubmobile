@@ -1,0 +1,122 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local Event = game:GetService("ReplicatedStorage").Remotes.TranciverRemote
+
+local LocalPlayer = Players.LocalPlayer
+
+if _G.TrapScriptRunning then
+    return
+end
+
+_G.TrapScriptRunning = true
+
+local Enabled = true
+
+local LastTrigger = 0
+local Cooldown = 0.2
+local CLOSE_DISTANCE = 55
+
+--// GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TrapStatusGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = game:GetService("CoreGui")
+
+local Button = Instance.new("TextButton")
+Button.Size = UDim2.new(0, 120, 0, 40)
+Button.Position = UDim2.new(0, 15, 0, 15)
+Button.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Button.BorderSizePixel = 0
+Button.Font = Enum.Font.GothamBold
+Button.TextSize = 16
+Button.AutoButtonColor = false
+Button.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 8)
+Corner.Parent = Button
+
+local function UpdateGUI()
+    if Enabled then
+        Button.Text = "TRAP: ON"
+        Button.TextColor3 = Color3.fromRGB(85, 255, 85)
+    else
+        Button.Text = "TRAP: OFF"
+        Button.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end
+
+local function ToggleTrap()
+    Enabled = not Enabled
+    UpdateGUI()
+
+    print("Trap Script:", Enabled and "ON" or "OFF")
+end
+
+UpdateGUI()
+
+--// Mobile / mouse / controller button
+Button.Activated:Connect(function()
+    ToggleTrap()
+end)
+
+--// F2 keyboard toggle
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.F2 then
+        ToggleTrap()
+    end
+end)
+
+--// Trap detection
+Event.OnClientEvent:Connect(function(action, player, style, skill, ball)
+
+    if not Enabled then
+        return
+    end
+
+    if action ~= "Hold" then
+        return
+    end
+
+    if player == LocalPlayer then
+        return
+    end
+
+    if skill ~= "Impact Shot" and skill ~= "Explosive Kick" then
+        return
+    end
+
+    if os.clock() - LastTrigger < Cooldown then
+        return
+    end
+
+    local MyCharacter = LocalPlayer.Character
+    local TheirCharacter = player.Character
+
+    local MyRoot = MyCharacter and MyCharacter:FindFirstChild("HumanoidRootPart")
+    local TheirRoot = TheirCharacter and TheirCharacter:FindFirstChild("HumanoidRootPart")
+
+    if not MyRoot or not TheirRoot then
+        return
+    end
+
+    LastTrigger = os.clock()
+
+    local Distance = (MyRoot.Position - TheirRoot.Position).Magnitude
+
+    if Distance <= CLOSE_DISTANCE then
+        Event:FireServer(
+            "UseSkill",
+            "Creative Trap"
+        )
+    else
+        Event:FireServer(
+            "UseSkill",
+            "Black Hole Trap"
+        )
+    end
+end)
