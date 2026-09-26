@@ -33,7 +33,7 @@ local TackleCooldown = 0.5
 local CLOSE_DISTANCE = 55
 
 local CHECK_INTERVAL = 0.03
-local TACKLE_RANGE = 8
+local TACKLE_RANGE = 15
 local PREDICTION_TIME = 0.12
 
 --------------------------------------------------
