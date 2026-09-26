@@ -2,19 +2,13 @@ local Players = game:GetService("Players")
 
 local player = Players.LocalPlayer
 
-local function setSpeed(character)
-    local humanoid = character:WaitForChild("Humanoid")
+while true do
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-    while character.Parent do
+    if humanoid then
         humanoid.WalkSpeed = 100
-        task.wait(0.1)
     end
-end
 
-if player.Character then
-    task.spawn(setSpeed, player.Character)
+    task.wait(1)
 end
-
-player.CharacterAdded:Connect(function(character)
-    task.spawn(setSpeed, character)
-end)
