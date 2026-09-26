@@ -4,28 +4,25 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local Transceiver = Remotes:WaitForChild("TranciverRemote")
-local SkillEvent = Remotes:WaitForChild("UseKeyboardSkillRemote")
-local PunchRemote = Remotes:WaitForChild("PunchRemote")
+local Transceiver = ReplicatedStorage.Remotes.TranciverRemote
+local SkillEvent = ReplicatedStorage.Remotes.UseKeyboardSkillRemote
 
 --------------------------------------------------
--- DUPLICATE GUARD
+--// PREVENT DUPLICATE SCRIPT
 --------------------------------------------------
 
 if _G.TrapTackleHubRunning then
-	return
+    return
 end
 
 _G.TrapTackleHubRunning = true
 
 --------------------------------------------------
--- SETTINGS
+--// SETTINGS
 --------------------------------------------------
 
 local TrapEnabled = true
 local TackleEnabled = true
-local AutoBikeEnabled = true
 
 local LastTrigger = 0
 local TrapCooldown = 0.2
@@ -34,80 +31,13 @@ local LastTackle = 0
 local TackleCooldown = 0.5
 
 local CLOSE_DISTANCE = 55
+
 local CHECK_INTERVAL = 0.03
 local TACKLE_RANGE = 8
 local PREDICTION_TIME = 0.12
 
 --------------------------------------------------
--- AUTO BIKE
---------------------------------------------------
-
-local EquippedSkills = LocalPlayer:WaitForChild("EquippedSkills")
-
-local SlotKeys = {
-	SlotOne = Enum.KeyCode.One,
-	SlotTwo = Enum.KeyCode.Two,
-	SlotThree = Enum.KeyCode.Three,
-	SlotFour = Enum.KeyCode.Four,
-	SlotFive = Enum.KeyCode.Five,
-	SlotSix = Enum.KeyCode.Six,
-	SlotSeven = Enum.KeyCode.Seven,
-	SlotEight = Enum.KeyCode.Eight,
-	SlotNine = Enum.KeyCode.Nine,
-}
-
-local function GetImpactBicycleKey()
-	for attributeName, keyCode in pairs(SlotKeys) do
-		if EquippedSkills:GetAttribute(attributeName) == "Impact Bicycle" then
-			return keyCode
-		end
-	end
-
-	return nil
-end
-
-local AutoBikeArmed = false
-
-local function UseImpactBicycle()
-	if not AutoBikeEnabled then
-		return
-	end
-
-	local Character = LocalPlayer.Character
-		or LocalPlayer.CharacterAdded:Wait()
-
-	local Ball = Character:FindFirstChild("Ball")
-	local Root = Character:FindFirstChild("HumanoidRootPart")
-
-	if not Ball or not Root then
-		return
-	end
-
-	--------------------------------------------------
-	-- LOB BALL UPWARD
-	--------------------------------------------------
-
-	local TargetPosition =
-		Root.Position + Vector3.new(0, 50, 0)
-
-	PunchRemote:FireServer(
-		"LobPass",
-		Ball,
-		TargetPosition
-	)
-
-	--------------------------------------------------
-	-- ACTIVATE IMPACT BICYCLE
-	--------------------------------------------------
-
-	Transceiver:FireServer(
-		"UseSkill",
-		"Impact Bicycle"
-	)
-end
-
---------------------------------------------------
--- GUI
+--// GUI
 --------------------------------------------------
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -115,488 +45,458 @@ ScreenGui.Name = "TrapTackleHub"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
-local Frame = Instance.new("Frame")
-Frame.Name = "Main"
-Frame.Size = UDim2.new(0, 190, 0, 170)
-Frame.Position = UDim2.new(0, 20, 0.5, -85)
-Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-Frame.BorderSizePixel = 0
-Frame.Parent = ScreenGui
+local function CreateStatus(name, yPosition, text)
+    local Button = Instance.new("TextButton")
 
-local Corner = Instance.new("UICorner")
-Corner.CornerRadius = UDim.new(0, 10)
-Corner.Parent = Frame
+    Button.Name = name
+    Button.Size = UDim2.new(0, 140, 0, 45)
+    Button.Position = UDim2.new(0, 15, 0, yPosition)
 
---------------------------------------------------
--- BUTTON CREATOR
---------------------------------------------------
+    Button.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    Button.BorderSizePixel = 0
 
-local function CreateButton(Name, Text, Y)
-	local Button = Instance.new("TextButton")
+    Button.AutoButtonColor = true
 
-	Button.Name = Name
-	Button.Size = UDim2.new(1, -20, 0, 35)
-	Button.Position = UDim2.new(0, 10, 0, Y)
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 16
 
-	Button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-	Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Button.Text = text
+    Button.TextColor3 = Color3.fromRGB(85, 255, 85)
 
-	Button.TextSize = 14
-	Button.Font = Enum.Font.SourceSansBold
+    Button.Parent = ScreenGui
 
-	Button.Text = Text
-	Button.BorderSizePixel = 0
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 8)
+    Corner.Parent = Button
 
-	Button.Parent = Frame
-
-	local ButtonCorner = Instance.new("UICorner")
-	ButtonCorner.CornerRadius = UDim.new(0, 7)
-	ButtonCorner.Parent = Button
-
-	return Button
+    return Button
 end
 
---------------------------------------------------
--- BUTTONS
---------------------------------------------------
-
-local TrapButton = CreateButton(
-	"TrapButton",
-	"Trap: ON",
-	10
+local TrapButton = CreateStatus(
+    "TrapButton",
+    15,
+    "TRAP: ON"
 )
 
-local TackleButton = CreateButton(
-	"TackleButton",
-	"Tackle: ON",
-	55
-)
-
-local AutoBikeButton = CreateButton(
-	"AutoBikeButton",
-	"Auto Bike: ON",
-	100
+local TackleButton = CreateStatus(
+    "TackleButton",
+    65,
+    "TACKLE: ON"
 )
 
 --------------------------------------------------
--- STATUS
+--// GUI UPDATE
 --------------------------------------------------
 
-local Status = Instance.new("TextLabel")
+local function UpdateTrapGUI()
 
-Status.Name = "Status"
-Status.Size = UDim2.new(1, -20, 0, 25)
-Status.Position = UDim2.new(0, 10, 0, 140)
+    if TrapEnabled then
 
-Status.BackgroundTransparency = 1
-Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+        TrapButton.Text = "TRAP: ON"
+        TrapButton.TextColor3 =
+            Color3.fromRGB(85, 255, 85)
 
-Status.TextSize = 12
-Status.Font = Enum.Font.SourceSans
+    else
 
-Status.Text = "F2 Trap | F3 Tackle | F4 Auto Bike"
+        TrapButton.Text = "TRAP: OFF"
+        TrapButton.TextColor3 =
+            Color3.fromRGB(255, 80, 80)
 
-Status.Parent = Frame
+    end
 
---------------------------------------------------
--- UPDATE BUTTONS
---------------------------------------------------
-
-local function UpdateTrapButton()
-	TrapButton.Text =
-		"Trap: " .. (TrapEnabled and "ON" or "OFF")
 end
 
-local function UpdateTackleButton()
-	TackleButton.Text =
-		"Tackle: " .. (TackleEnabled and "ON" or "OFF")
-end
+local function UpdateTackleGUI()
 
-local function UpdateAutoBikeButton()
-	AutoBikeButton.Text =
-		"Auto Bike: " .. (AutoBikeEnabled and "ON" or "OFF")
-end
+    if TackleEnabled then
 
---------------------------------------------------
--- GUI BUTTONS
---------------------------------------------------
+        TackleButton.Text = "TACKLE: ON"
+        TackleButton.TextColor3 =
+            Color3.fromRGB(85, 255, 85)
 
-TrapButton.MouseButton1Click:Connect(function()
-	TrapEnabled = not TrapEnabled
-	UpdateTrapButton()
-end)
+    else
 
-TackleButton.MouseButton1Click:Connect(function()
-	TackleEnabled = not TackleEnabled
-	UpdateTackleButton()
-end)
+        TackleButton.Text = "TACKLE: OFF"
+        TackleButton.TextColor3 =
+            Color3.fromRGB(255, 80, 80)
 
-AutoBikeButton.MouseButton1Click:Connect(function()
-	AutoBikeEnabled = not AutoBikeEnabled
+    end
 
-	-- Cancel pending slot press
-	AutoBikeArmed = false
-
-	UpdateAutoBikeButton()
-end)
-
---------------------------------------------------
--- KEYBOARD INPUT
---------------------------------------------------
-
-UserInputService.InputBegan:Connect(function(Input, GameProcessed)
-
-	if GameProcessed then
-		return
-	end
-
-	--------------------------------------------------
-	-- TRAP TOGGLE
-	--------------------------------------------------
-
-	if Input.KeyCode == Enum.KeyCode.F2 then
-		TrapEnabled = not TrapEnabled
-		UpdateTrapButton()
-		return
-	end
-
-	--------------------------------------------------
-	-- TACKLE TOGGLE
-	--------------------------------------------------
-
-	if Input.KeyCode == Enum.KeyCode.F3 then
-		TackleEnabled = not TackleEnabled
-		UpdateTackleButton()
-		return
-	end
-
-	--------------------------------------------------
-	-- AUTO BIKE TOGGLE
-	--------------------------------------------------
-
-	if Input.KeyCode == Enum.KeyCode.F4 then
-		AutoBikeEnabled = not AutoBikeEnabled
-		AutoBikeArmed = false
-
-		UpdateAutoBikeButton()
-
-		return
-	end
-
-	--------------------------------------------------
-	-- AUTO BIKE
-	--------------------------------------------------
-
-	if not AutoBikeEnabled then
-		return
-	end
-
-	local ImpactKey = GetImpactBicycleKey()
-
-	--------------------------------------------------
-	-- PRESS IMPACT BICYCLE SLOT
-	--------------------------------------------------
-
-	if ImpactKey
-		and Input.KeyCode == ImpactKey then
-
-		AutoBikeArmed = true
-
-		return
-	end
-
-	--------------------------------------------------
-	-- PRESS LMB
-	--------------------------------------------------
-
-	if Input.UserInputType == Enum.UserInputType.MouseButton1
-		and AutoBikeArmed then
-
-		AutoBikeArmed = false
-
-		UseImpactBicycle()
-	end
-end)
-
---------------------------------------------------
--- IFRAME CHECK
---------------------------------------------------
-
-local function HasIFrames(Character)
-
-	if not Character then
-		return false
-	end
-
-	return Character:FindFirstChild("IFrames") ~= nil
-		or Character:FindFirstChild("SuperIFrames") ~= nil
 end
 
 --------------------------------------------------
--- TRAP SYSTEM
+--// TOGGLE FUNCTIONS
+--------------------------------------------------
+
+local function ToggleTrap()
+
+    TrapEnabled = not TrapEnabled
+
+    UpdateTrapGUI()
+
+    print(
+        "Trap Script:",
+        TrapEnabled and "ON" or "OFF"
+    )
+
+end
+
+local function ToggleTackle()
+
+    TackleEnabled = not TackleEnabled
+
+    UpdateTackleGUI()
+
+    print(
+        "Tackle Script:",
+        TackleEnabled and "ON" or "OFF"
+    )
+
+end
+
+--------------------------------------------------
+--// MOBILE BUTTONS
+--------------------------------------------------
+
+TrapButton.Activated:Connect(function()
+
+    ToggleTrap()
+
+end)
+
+TackleButton.Activated:Connect(function()
+
+    ToggleTackle()
+
+end)
+
+--------------------------------------------------
+--// F2 / F3 KEYBOARD CONTROLS
+--------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(
+    input,
+    gameProcessed
+)
+
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.F2 then
+
+        ToggleTrap()
+
+    elseif input.KeyCode == Enum.KeyCode.F3 then
+
+        ToggleTackle()
+
+    end
+
+end)
+
+--------------------------------------------------
+--// IFRAME CHECK
+--------------------------------------------------
+
+local function HasIFrames(character)
+
+    if not character then
+        return false
+    end
+
+    return
+        character:FindFirstChild("IFrames") ~= nil
+        or
+        character:FindFirstChild("SuperIFrames") ~= nil
+
+end
+
+--------------------------------------------------
+--// TRAP SYSTEM
 --------------------------------------------------
 
 Transceiver.OnClientEvent:Connect(function(
-	Action,
-	Player,
-	Style,
-	Skill,
-	Ball
+    action,
+    player,
+    style,
+    skill,
+    ball
 )
 
-	if not TrapEnabled then
-		return
-	end
+    if not TrapEnabled then
+        return
+    end
 
-	if Action ~= "Hold" then
-		return
-	end
+    if action ~= "Hold" then
+        return
+    end
 
-	if Player == LocalPlayer then
-		return
-	end
+    if player == LocalPlayer then
+        return
+    end
 
-	if Skill ~= "Impact Shot"
-		and Skill ~= "Explosive Kick" then
-		return
-	end
+    if
+        skill ~= "Impact Shot"
+        and
+        skill ~= "Explosive Kick"
+    then
+        return
+    end
 
-	--------------------------------------------------
-	-- COOLDOWN
-	--------------------------------------------------
+    if os.clock() - LastTrigger < TrapCooldown then
+        return
+    end
 
-	local Now = tick()
+    local MyCharacter =
+        LocalPlayer.Character
 
-	if Now - LastTrigger < TrapCooldown then
-		return
-	end
+    local TheirCharacter =
+        player.Character
 
-	--------------------------------------------------
-	-- LOCAL CHARACTER
-	--------------------------------------------------
+    local MyRoot =
+        MyCharacter
+        and
+        MyCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-	local Character = LocalPlayer.Character
+    local TheirRoot =
+        TheirCharacter
+        and
+        TheirCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-	if not Character then
-		return
-	end
+    if not MyRoot or not TheirRoot then
+        return
+    end
 
-	local LocalRoot =
-		Character:FindFirstChild("HumanoidRootPart")
+    LastTrigger = os.clock()
 
-	if not LocalRoot then
-		return
-	end
+    local Distance =
+        (
+            MyRoot.Position
+            -
+            TheirRoot.Position
+        ).Magnitude
 
-	--------------------------------------------------
-	-- ENEMY CHARACTER
-	--------------------------------------------------
+    if Distance <= CLOSE_DISTANCE then
 
-	local EnemyCharacter = Player.Character
+        Transceiver:FireServer(
+            "UseSkill",
+            "Creative Trap"
+        )
 
-	if not EnemyCharacter then
-		return
-	end
+    else
 
-	local EnemyRoot =
-		EnemyCharacter:FindFirstChild("HumanoidRootPart")
+        Transceiver:FireServer(
+            "UseSkill",
+            "Black Hole Trap"
+        )
 
-	if not EnemyRoot then
-		return
-	end
+    end
 
-	--------------------------------------------------
-	-- IFRAME CHECK
-	--------------------------------------------------
-
-	if HasIFrames(Character) then
-		return
-	end
-
-	--------------------------------------------------
-	-- DISTANCE
-	--------------------------------------------------
-
-	local Distance =
-		(LocalRoot.Position - EnemyRoot.Position).Magnitude
-
-	if Distance > CLOSE_DISTANCE then
-		return
-	end
-
-	--------------------------------------------------
-	-- TRIGGER CREATIVE TRAP
-	--------------------------------------------------
-
-	LastTrigger = Now
-
-	Transceiver:FireServer(
-		"UseSkill",
-		"Creative Trap"
-	)
 end)
 
 --------------------------------------------------
--- GET BALL HOLDER
+--// FIND BALL HOLDER
 --------------------------------------------------
 
 local function GetBallHolder()
 
-	for _, Player in ipairs(Players:GetPlayers()) do
+    for _, player in ipairs(
+        Players:GetPlayers()
+    ) do
 
-		if Player ~= LocalPlayer then
+        if player ~= LocalPlayer then
 
-			local Character = Player.Character
+            local character =
+                player.Character
 
-			if Character then
+            if character then
 
-				local Ball =
-					Character:FindFirstChild("Ball")
+                local ballFolder =
+                    character:FindFirstChild(
+                        "Ball"
+                    )
 
-				local BallObject =
-					Ball and Ball:FindFirstChild("Ball")
+                if ballFolder then
 
-				if BallObject then
-					return Player, BallObject
-				end
-			end
-		end
-	end
+                    local ball =
+                        ballFolder:FindFirstChild(
+                            "Ball"
+                        )
 
-	return nil, nil
+                    if ball then
+
+                        return
+                            player,
+                            character,
+                            ball
+
+                    end
+
+                end
+
+            end
+
+        end
+
+    end
+
+    return nil
+
 end
 
 --------------------------------------------------
--- TACKLE
+--// TACKLE
 --------------------------------------------------
 
-local function TryTackle()
+local function Tackle()
 
-	if not TackleEnabled then
-		return
-	end
+    if not TackleEnabled then
+        return
+    end
 
-	--------------------------------------------------
-	-- COOLDOWN
-	--------------------------------------------------
+    local Character =
+        LocalPlayer.Character
 
-	local Now = tick()
+    if not Character then
+        return
+    end
 
-	if Now - LastTackle < TackleCooldown then
-		return
-	end
+    local Root =
+        Character:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-	--------------------------------------------------
-	-- LOCAL CHARACTER
-	--------------------------------------------------
+    if not Root then
+        return
+    end
 
-	local Character = LocalPlayer.Character
+    local Holder,
+        HolderCharacter,
+        Ball =
+        GetBallHolder()
 
-	if not Character then
-		return
-	end
+    if
+        not Holder
+        or
+        not HolderCharacter
+        or
+        not Ball
+    then
+        return
+    end
 
-	local Root =
-		Character:FindFirstChild("HumanoidRootPart")
+    --------------------------------------------------
+    -- FIRST IFRAME CHECK
+    --------------------------------------------------
 
-	if not Root then
-		return
-	end
+    if HasIFrames(HolderCharacter) then
+        return
+    end
 
-	--------------------------------------------------
-	-- LOCAL IFRAME
-	--------------------------------------------------
+    --------------------------------------------------
+    -- PREDICT BALL POSITION
+    --------------------------------------------------
 
-	if HasIFrames(Character) then
-		return
-	end
+    local PredictedPosition =
+        Ball.Position
+        +
+        (
+            Ball.AssemblyLinearVelocity
+            *
+            PREDICTION_TIME
+        )
 
-	--------------------------------------------------
-	-- FIND BALL HOLDER
-	--------------------------------------------------
+    local Distance =
+        (
+            Root.Position
+            -
+            PredictedPosition
+        ).Magnitude
 
-	local Holder, Ball = GetBallHolder()
+    if Distance > TACKLE_RANGE then
+        return
+    end
 
-	if not Holder or not Ball then
-		return
-	end
+    --------------------------------------------------
+    -- COOLDOWN
+    --------------------------------------------------
 
-	--------------------------------------------------
-	-- PREDICT BALL
-	--------------------------------------------------
+    if
+        os.clock() - LastTackle
+        <
+        TackleCooldown
+    then
+        return
+    end
 
-	local BallPosition = Ball.Position
-	local Velocity = Ball.AssemblyLinearVelocity
+    --------------------------------------------------
+    -- SECOND IFRAME CHECK
+    --------------------------------------------------
 
-	local PredictedPosition =
-		BallPosition + Velocity * PREDICTION_TIME
+    if HasIFrames(HolderCharacter) then
+        return
+    end
 
-	--------------------------------------------------
-	-- DISTANCE
-	--------------------------------------------------
+    LastTackle = os.clock()
 
-	local Distance =
-		(Root.Position - PredictedPosition).Magnitude
+    --------------------------------------------------
+    -- TACKLE BEGIN
+    --------------------------------------------------
 
-	if Distance > TACKLE_RANGE then
-		return
-	end
+    SkillEvent:FireServer(
+        "TackleBegin"
+    )
 
-	--------------------------------------------------
-	-- HOLDER IFRAME
-	--------------------------------------------------
+    --------------------------------------------------
+    -- FINAL IFRAME CHECK
+    --------------------------------------------------
 
-	local HolderCharacter = Holder.Character
+    if HasIFrames(HolderCharacter) then
+        return
+    end
 
-	if HasIFrames(HolderCharacter) then
-		return
-	end
+    --------------------------------------------------
+    -- TACKLE
+    --------------------------------------------------
 
-	--------------------------------------------------
-	-- TACKLE
-	--------------------------------------------------
+    SkillEvent:FireServer(
+        "Tackle",
+        Ball,
+        Root.CFrame * CFrame.new(
+            0,
+            -1.5,
+            0
+        )
+    )
 
-	LastTackle = Now
-
-	SkillEvent:FireServer(
-		"TackleBegin"
-	)
-
-	task.wait()
-
-	--------------------------------------------------
-	-- FINAL IFRAME CHECK
-	--------------------------------------------------
-
-	if HasIFrames(HolderCharacter) then
-		return
-	end
-
-	SkillEvent:FireServer(
-		"Tackle",
-		Ball,
-		Root.CFrame * CFrame.new(0, -1.5, 0)
-	)
 end
 
 --------------------------------------------------
--- TACKLE LOOP
+--// TACKLE LOOP
 --------------------------------------------------
 
 task.spawn(function()
 
-	while _G.TrapTackleHubRunning do
+    while _G.TrapTackleHubRunning do
 
-		TryTackle()
+        Tackle()
 
-		task.wait(CHECK_INTERVAL)
-	end
+        task.wait(
+            CHECK_INTERVAL
+        )
+
+    end
+
 end)
 
 --------------------------------------------------
--- INITIAL GUI STATE
+--// INITIAL GUI STATE
 --------------------------------------------------
 
-UpdateTrapButton()
-UpdateTackleButton()
-UpdateAutoBikeButton()
+UpdateTrapGUI()
+UpdateTackleGUI()
