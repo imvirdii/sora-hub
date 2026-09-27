@@ -64,45 +64,41 @@ local SlotKeys = {
     SlotNine = Enum.KeyCode.Nine,
 }
 
-local ImpactSlot = nil
-local ImpactKey = nil
-
 --------------------------------------------------
---// FIND IMPACT BICYCLE
+--// FIND IMPACT BICYCLE ONCE
 --------------------------------------------------
 
-local function FindImpactBicycle()
+local ImpactSlot
+local ImpactKey
 
-    ImpactSlot = nil
-    ImpactKey = nil
+for attributeName, keyCode in pairs(SlotKeys) do
 
-    for attributeName, keyCode in pairs(SlotKeys) do
+    local skill =
+        EquippedSkills:GetAttribute(attributeName)
 
-        local skill =
-            EquippedSkills:GetAttribute(attributeName)
+    if skill == "Impact Bicycle" then
 
-        if skill == "Impact Bicycle" then
+        ImpactSlot = attributeName
+        ImpactKey = keyCode
 
-            ImpactSlot = attributeName
-            ImpactKey = keyCode
-
-            break
-        end
-    end
-
-    if ImpactKey then
-        print(
-            "Impact Bicycle found in:",
-            ImpactSlot
-        )
-    else
-        warn(
-            "Impact Bicycle was not found in EquippedSkills"
-        )
+        break
     end
 end
 
-FindImpactBicycle()
+if not ImpactKey then
+
+    warn(
+        "Impact Bicycle was not found in EquippedSkills"
+    )
+
+else
+
+    print(
+        "Impact Bicycle found in:",
+        ImpactSlot
+    )
+
+end
 
 --------------------------------------------------
 --// GUI
@@ -186,35 +182,43 @@ local function UpdateStatus(Status, Enabled, Name)
 end
 
 local function UpdateTrapGUI()
+
     UpdateStatus(
         TrapStatus,
         TrapEnabled,
         "TRAP"
     )
+
 end
 
 local function UpdateTackleGUI()
+
     UpdateStatus(
         TackleStatus,
         TackleEnabled,
         "TACKLE"
     )
+
 end
 
 local function UpdateAutoTrapTDGUI()
+
     UpdateStatus(
         AutoTrapTDStatus,
         AutoTrapTDEnabled,
         "AUTO TRAP TD"
     )
+
 end
 
 local function UpdateAutoBikeGUI()
+
     UpdateStatus(
         AutoBikeStatus,
         AutoBikeEnabled,
         "AUTO BIKE"
     )
+
 end
 
 --------------------------------------------------
@@ -244,6 +248,7 @@ UserInputService.InputBegan:Connect(function(
             "Trap Script:",
             TrapEnabled and "ON" or "OFF"
         )
+
     end
 
     --------------------------------------------------
@@ -260,6 +265,7 @@ UserInputService.InputBegan:Connect(function(
             "Tackle Script:",
             TackleEnabled and "ON" or "OFF"
         )
+
     end
 
     --------------------------------------------------
@@ -277,6 +283,7 @@ UserInputService.InputBegan:Connect(function(
             "Auto Trap TD:",
             AutoTrapTDEnabled and "ON" or "OFF"
         )
+
     end
 
     --------------------------------------------------
@@ -290,10 +297,22 @@ UserInputService.InputBegan:Connect(function(
 
         UpdateAutoBikeGUI()
 
+        if not AutoBikeEnabled then
+
+            BikeWaitingForLMB = false
+
+            if BikeConnection then
+                BikeConnection:Disconnect()
+                BikeConnection = nil
+            end
+
+        end
+
         print(
             "Auto Bike:",
             AutoBikeEnabled and "ON" or "OFF"
         )
+
     end
 end)
 
@@ -332,6 +351,7 @@ local function getPlayerTeam(player)
             if value == player.Name then
                 return teamFolder
             end
+
         end
     end
 
@@ -432,6 +452,7 @@ Transceiver.OnClientEvent:Connect(function(
             "UseSkill",
             "Black Hole Trap"
         )
+
     end
 end)
 
@@ -444,6 +465,7 @@ local function IsBall(ball)
     return ball
         and ball:IsDescendantOf(workspace)
         and ball.Name == "Ball"
+
 end
 
 Transceiver.OnClientEvent:Connect(function(
@@ -482,6 +504,7 @@ Transceiver.OnClientEvent:Connect(function(
         "UseSkill",
         "Creative Trap"
     )
+
 end)
 
 --------------------------------------------------
@@ -512,9 +535,11 @@ local function getBallHolder()
                             ballFolder:FindFirstChild("Ball")
 
                         if ball then
+
                             return player,
                                 character,
                                 ball
+
                         end
                     end
                 end
@@ -560,16 +585,30 @@ local function tackle()
         or not holderCharacter
         or not ball
     then
+
         return
+
     end
+
+    --------------------------------------------------
+    -- TEAM CHECK
+    --------------------------------------------------
 
     if isSameTeam(holder) then
         return
     end
 
+    --------------------------------------------------
+    -- IFRAME CHECK
+    --------------------------------------------------
+
     if hasIFrames(holderCharacter) then
         return
     end
+
+    --------------------------------------------------
+    -- PREDICT BALL POSITION
+    --------------------------------------------------
 
     local predictedPosition =
         ball.Position
@@ -584,14 +623,26 @@ local function tackle()
             - predictedPosition
         ).Magnitude > TACKLE_RANGE
     then
+
         return
+
     end
+
+    --------------------------------------------------
+    -- COOLDOWN
+    --------------------------------------------------
 
     if os.clock() - LastTackle
         < TackleCooldown
     then
+
         return
+
     end
+
+    --------------------------------------------------
+    -- CHECK BEFORE FIRE
+    --------------------------------------------------
 
     if isSameTeam(holder) then
         return
@@ -607,13 +658,25 @@ local function tackle()
         "TackleBegin"
     )
 
+    --------------------------------------------------
+    -- FINAL TEAM CHECK
+    --------------------------------------------------
+
     if isSameTeam(holder) then
         return
     end
 
+    --------------------------------------------------
+    -- FINAL IFRAME CHECK
+    --------------------------------------------------
+
     if hasIFrames(holderCharacter) then
         return
     end
+
+    --------------------------------------------------
+    -- TACKLE
+    --------------------------------------------------
 
     SkillEvent:FireServer(
         "Tackle",
@@ -621,6 +684,7 @@ local function tackle()
         root.CFrame
             * CFrame.new(0, -1.5, 0)
     )
+
 end
 
 --------------------------------------------------
@@ -636,6 +700,7 @@ task.spawn(function()
         task.wait(CHECK_INTERVAL)
 
     end
+
 end)
 
 --------------------------------------------------
@@ -645,8 +710,10 @@ end)
 local function StartBikeLMBListener()
 
     if BikeConnection then
+
         BikeConnection:Disconnect()
         BikeConnection = nil
+
     end
 
     BikeWaitingForLMB = true
@@ -666,14 +733,18 @@ local function StartBikeLMBListener()
                 if mouseInput.UserInputType
                     ~= Enum.UserInputType.MouseButton1
                 then
+
                     return
+
                 end
 
                 BikeWaitingForLMB = false
 
                 if BikeConnection then
+
                     BikeConnection:Disconnect()
                     BikeConnection = nil
+
                 end
 
                 local Character =
@@ -714,6 +785,7 @@ local function StartBikeLMBListener()
                     "UseSkill",
                     "Impact Bicycle"
                 )
+
             end
         )
 end
@@ -735,12 +807,6 @@ UserInputService.InputBegan:Connect(function(
         return
     end
 
-    --------------------------------------------------
-    -- REFRESH SLOT IN CASE EQUIPPED SKILLS CHANGED
-    --------------------------------------------------
-
-    FindImpactBicycle()
-
     if not ImpactKey then
         return
     end
@@ -757,23 +823,9 @@ UserInputService.InputBegan:Connect(function(
             "Impact Bicycle selected:",
             ImpactSlot
         )
+
     end
 end)
-
---------------------------------------------------
---// WATCH FOR SKILL SLOT CHANGES
---------------------------------------------------
-
-for attributeName in pairs(SlotKeys) do
-
-    EquippedSkills:GetAttributeChangedSignal(
-        attributeName
-    ):Connect(function()
-
-        FindImpactBicycle()
-
-    end)
-end
 
 --------------------------------------------------
 --// INITIAL GUI STATE
