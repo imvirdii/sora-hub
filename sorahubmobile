@@ -23,9 +23,13 @@ _G.TrapTackleHubRunning = true
 
 local TrapEnabled = true
 local TackleEnabled = true
+local AutoTrapTDEnabled = true
 
 local LastTrigger = 0
 local TrapCooldown = 0.2
+
+local LastAutoTrapTD = 0
+local AutoTrapTDCooldown = 0.15
 
 local LastTackle = 0
 local TackleCooldown = 0.5
@@ -46,6 +50,7 @@ local ExceptionList = {
 }
 
 local function isExcluded(player)
+
     if not player then
         return false
     end
@@ -58,95 +63,196 @@ end
 --------------------------------------------------
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "TrapTackleHub"
+ScreenGui.Name = "TrapTackleMobileHub"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
+--------------------------------------------------
+--// CREATE MOBILE BUTTON
+--------------------------------------------------
+
 local function CreateStatus(name, yPosition, text)
-    local Frame = Instance.new("Frame")
-    Frame.Name = name
-    Frame.Size = UDim2.new(0, 120, 0, 40)
-    Frame.Position = UDim2.new(0, 15, 0, yPosition)
-    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    Frame.BorderSizePixel = 0
-    Frame.Parent = ScreenGui
+
+    local Button = Instance.new("TextButton")
+
+    Button.Name = name
+    Button.Size = UDim2.new(0, 180, 0, 50)
+    Button.Position = UDim2.new(0, 15, 0, yPosition)
+
+    Button.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    Button.BorderSizePixel = 0
+
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 16
+    Button.Text = text
+    Button.TextColor3 = Color3.fromRGB(85, 255, 85)
+
+    Button.AutoButtonColor = true
+
+    Button.Parent = ScreenGui
 
     local Corner = Instance.new("UICorner")
-    Corner.CornerRadius = UDim.new(0, 8)
-    Corner.Parent = Frame
+    Corner.CornerRadius = UDim.new(0, 10)
+    Corner.Parent = Button
 
-    local Status = Instance.new("TextLabel")
-    Status.Size = UDim2.new(1, 0, 1, 0)
-    Status.BackgroundTransparency = 1
-    Status.Font = Enum.Font.GothamBold
-    Status.TextSize = 16
-    Status.Text = text
-    Status.TextColor3 = Color3.fromRGB(85, 255, 85)
-    Status.Parent = Frame
-
-    return Status
+    return Button
 end
 
-local TrapStatus = CreateStatus(
-    "TrapStatus",
+local TrapButton = CreateStatus(
+    "TrapButton",
     15,
     "TRAP: ON"
 )
 
-local TackleStatus = CreateStatus(
-    "TackleStatus",
-    60,
+local TackleButton = CreateStatus(
+    "TackleButton",
+    75,
     "TACKLE: ON"
+)
+
+local AutoTrapTDButton = CreateStatus(
+    "AutoTrapTDButton",
+    135,
+    "AUTO TRAP TD: ON"
 )
 
 --------------------------------------------------
 --// GUI UPDATES
 --------------------------------------------------
 
-local function UpdateTrapGUI()
-    if TrapEnabled then
-        TrapStatus.Text = "TRAP: ON"
-        TrapStatus.TextColor3 = Color3.fromRGB(85, 255, 85)
+local function UpdateButton(Button, Enabled, Name)
+
+    if Enabled then
+
+        Button.Text = Name .. ": ON"
+        Button.TextColor3 =
+            Color3.fromRGB(85, 255, 85)
+
     else
-        TrapStatus.Text = "TRAP: OFF"
-        TrapStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+
+        Button.Text = Name .. ": OFF"
+        Button.TextColor3 =
+            Color3.fromRGB(255, 80, 80)
+
     end
+
+end
+
+local function UpdateTrapGUI()
+
+    UpdateButton(
+        TrapButton,
+        TrapEnabled,
+        "TRAP"
+    )
+
 end
 
 local function UpdateTackleGUI()
-    if TackleEnabled then
-        TackleStatus.Text = "TACKLE: ON"
-        TackleStatus.TextColor3 = Color3.fromRGB(85, 255, 85)
-    else
-        TackleStatus.Text = "TACKLE: OFF"
-        TackleStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    end
+
+    UpdateButton(
+        TackleButton,
+        TackleEnabled,
+        "TACKLE"
+    )
+
+end
+
+local function UpdateAutoTrapTDGUI()
+
+    UpdateButton(
+        AutoTrapTDButton,
+        AutoTrapTDEnabled,
+        "AUTO TRAP TD"
+    )
+
 end
 
 --------------------------------------------------
---// F2 / F3 TOGGLES
+--// MOBILE BUTTONS
 --------------------------------------------------
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
+-- TRAP BUTTON
+TrapButton.Activated:Connect(function()
+
+    TrapEnabled = not TrapEnabled
+
+    UpdateTrapGUI()
+
+    print(
+        "Trap Script:",
+        TrapEnabled and "ON" or "OFF"
+    )
+
+end)
+
+-- TACKLE BUTTON
+TackleButton.Activated:Connect(function()
+
+    TackleEnabled = not TackleEnabled
+
+    UpdateTackleGUI()
+
+    print(
+        "Tackle Script:",
+        TackleEnabled and "ON" or "OFF"
+    )
+
+end)
+
+-- AUTO TRAP TD BUTTON
+AutoTrapTDButton.Activated:Connect(function()
+
+    AutoTrapTDEnabled =
+        not AutoTrapTDEnabled
+
+    UpdateAutoTrapTDGUI()
+
+    print(
+        "Auto Trap TD:",
+        AutoTrapTDEnabled and "ON" or "OFF"
+    )
+
+end)
+
+--------------------------------------------------
+--// OPTIONAL KEYBOARD CONTROLS
+--------------------------------------------------
+-- F2 = Trap
+-- F3 = Tackle
+-- F4 = Auto Trap TD
+--------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(
+    input,
+    gameProcessed
+)
+
     if gameProcessed then
         return
     end
 
-    -- F2 = Trap
     if input.KeyCode == Enum.KeyCode.F2 then
+
         TrapEnabled = not TrapEnabled
+
         UpdateTrapGUI()
 
-        print("Trap Script:", TrapEnabled and "ON" or "OFF")
-    end
+    elseif input.KeyCode == Enum.KeyCode.F3 then
 
-    -- F3 = Tackle
-    if input.KeyCode == Enum.KeyCode.F3 then
         TackleEnabled = not TackleEnabled
+
         UpdateTackleGUI()
 
-        print("Tackle Script:", TackleEnabled and "ON" or "OFF")
+    elseif input.KeyCode == Enum.KeyCode.F4 then
+
+        AutoTrapTDEnabled =
+            not AutoTrapTDEnabled
+
+        UpdateAutoTrapTDGUI()
+
     end
+
 end)
 
 --------------------------------------------------
@@ -154,19 +260,27 @@ end)
 --------------------------------------------------
 
 local function hasIFrames(character)
+
     if not character then
         return false
     end
 
     return character:FindFirstChild("IFrames") ~= nil
         or character:FindFirstChild("SuperIFrames") ~= nil
+
 end
 
 --------------------------------------------------
 --// TRAP SYSTEM
 --------------------------------------------------
 
-Transceiver.OnClientEvent:Connect(function(action, player, style, skill, ball)
+Transceiver.OnClientEvent:Connect(function(
+    action,
+    player,
+    style,
+    skill,
+    ball
+)
 
     if not TrapEnabled then
         return
@@ -185,22 +299,35 @@ Transceiver.OnClientEvent:Connect(function(action, player, style, skill, ball)
         return
     end
 
-    if skill ~= "Impact Shot" and skill ~= "Explosive Kick" then
+    if skill ~= "Impact Shot"
+        and skill ~= "Explosive Kick"
+    then
         return
     end
 
-    if os.clock() - LastTrigger < TrapCooldown then
+    if os.clock() - LastTrigger
+        < TrapCooldown
+    then
         return
     end
 
-    local MyCharacter = LocalPlayer.Character
-    local TheirCharacter = player.Character
+    local MyCharacter =
+        LocalPlayer.Character
 
-    local MyRoot = MyCharacter
-        and MyCharacter:FindFirstChild("HumanoidRootPart")
+    local TheirCharacter =
+        player.Character
 
-    local TheirRoot = TheirCharacter
-        and TheirCharacter:FindFirstChild("HumanoidRootPart")
+    local MyRoot =
+        MyCharacter
+        and MyCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
+
+    local TheirRoot =
+        TheirCharacter
+        and TheirCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
     if not MyRoot or not TheirRoot then
         return
@@ -209,7 +336,10 @@ Transceiver.OnClientEvent:Connect(function(action, player, style, skill, ball)
     LastTrigger = os.clock()
 
     local Distance =
-        (MyRoot.Position - TheirRoot.Position).Magnitude
+        (
+            MyRoot.Position
+            - TheirRoot.Position
+        ).Magnitude
 
     if Distance <= CLOSE_DISTANCE then
 
@@ -226,6 +356,112 @@ Transceiver.OnClientEvent:Connect(function(action, player, style, skill, ball)
         )
 
     end
+
+end)
+
+--------------------------------------------------
+--// AUTO TRAP TD
+--------------------------------------------------
+
+local function IsBall(ball)
+
+    return ball
+        and ball:IsDescendantOf(workspace)
+        and ball.Name == "Ball"
+
+end
+
+--------------------------------------------------
+--// CHECK IF LOCAL PLAYER HAS BALL
+--
+-- Example:
+-- Character.Ball.Ball
+--------------------------------------------------
+
+local function LocalPlayerHasBall()
+
+    local Character =
+        LocalPlayer.Character
+
+    if not Character then
+        return false
+    end
+
+    local BallFolder =
+        Character:FindFirstChild("Ball")
+
+    if not BallFolder then
+        return false
+    end
+
+    local Ball =
+        BallFolder:FindFirstChild("Ball")
+
+    return Ball ~= nil
+
+end
+
+Transceiver.OnClientEvent:Connect(function(
+    action,
+    player,
+    style,
+    skill,
+    ball
+)
+
+    if not AutoTrapTDEnabled then
+        return
+    end
+
+    if player == LocalPlayer then
+        return
+    end
+
+    if action ~= "Kick" then
+        return
+    end
+
+    if style ~= "Total Defense" then
+        return
+    end
+
+    if skill ~= "Defensive Rush" then
+        return
+    end
+
+    if not IsBall(ball) then
+        return
+    end
+
+    --------------------------------------------------
+    -- ONLY ACTIVATE IF WE CURRENTLY HAVE THE BALL
+    --------------------------------------------------
+
+    if not LocalPlayerHasBall() then
+        return
+    end
+
+    --------------------------------------------------
+    -- COOLDOWN
+    --------------------------------------------------
+
+    if os.clock() - LastAutoTrapTD
+        < AutoTrapTDCooldown
+    then
+        return
+    end
+
+    LastAutoTrapTD = os.clock()
+
+    --------------------------------------------------
+    -- CREATIVE TRAP
+    --------------------------------------------------
+
+    Transceiver:FireServer(
+        "UseSkill",
+        "Creative Trap"
+    )
+
 end)
 
 --------------------------------------------------
@@ -234,14 +470,17 @@ end)
 
 local function getBallHolder()
 
-    for _, player in ipairs(Players:GetPlayers()) do
+    for _, player in ipairs(
+        Players:GetPlayers()
+    ) do
 
         if player ~= LocalPlayer then
 
             -- EXCEPTION CHECK
             if not isExcluded(player) then
 
-                local character = player.Character
+                local character =
+                    player.Character
 
                 if character then
 
@@ -254,7 +493,11 @@ local function getBallHolder()
                             ballFolder:FindFirstChild("Ball")
 
                         if ball then
-                            return player, character, ball
+
+                            return player,
+                                character,
+                                ball
+
                         end
 
                     end
@@ -264,6 +507,7 @@ local function getBallHolder()
     end
 
     return nil
+
 end
 
 --------------------------------------------------
@@ -276,26 +520,31 @@ local function tackle()
         return
     end
 
-    local character = LocalPlayer.Character
+    local character =
+        LocalPlayer.Character
 
     if not character then
         return
     end
 
     local root =
-        character:FindFirstChild("HumanoidRootPart")
+        character:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
     if not root then
         return
     end
 
-    local holder, holderCharacter, ball =
+    local holder,
+        holderCharacter,
+        ball =
         getBallHolder()
 
     if not holder
         or not holderCharacter
-        or not ball then
-
+        or not ball
+    then
         return
     end
 
@@ -304,29 +553,45 @@ local function tackle()
         return
     end
 
-    -- Check immediately
+    -- IFRAME CHECK
     if hasIFrames(holderCharacter) then
         return
     end
 
-    -- Predict ball movement
+    --------------------------------------------------
+    -- PREDICT BALL
+    --------------------------------------------------
+
     local predictedPosition =
         ball.Position
-        + (ball.AssemblyLinearVelocity * PREDICTION_TIME)
+        + (
+            ball.AssemblyLinearVelocity
+            * PREDICTION_TIME
+        )
 
     if
-        (root.Position - predictedPosition).Magnitude
-        > TACKLE_RANGE
+        (
+            root.Position
+            - predictedPosition
+        ).Magnitude > TACKLE_RANGE
     then
         return
     end
 
-    -- Cooldown
-    if os.clock() - LastTackle < TackleCooldown then
+    --------------------------------------------------
+    -- COOLDOWN
+    --------------------------------------------------
+
+    if os.clock() - LastTackle
+        < TackleCooldown
+    then
         return
     end
 
-    -- Check again before firing
+    --------------------------------------------------
+    -- FINAL IFRAME CHECK
+    --------------------------------------------------
+
     if hasIFrames(holderCharacter) then
         return
     end
@@ -337,7 +602,6 @@ local function tackle()
         "TackleBegin"
     )
 
-    -- Final iframe check
     if hasIFrames(holderCharacter) then
         return
     end
@@ -345,8 +609,10 @@ local function tackle()
     SkillEvent:FireServer(
         "Tackle",
         ball,
-        root.CFrame * CFrame.new(0, -1.5, 0)
+        root.CFrame
+            * CFrame.new(0, -1.5, 0)
     )
+
 end
 
 --------------------------------------------------
@@ -371,3 +637,4 @@ end)
 
 UpdateTrapGUI()
 UpdateTackleGUI()
+UpdateAutoTrapTDGUI()
