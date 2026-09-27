@@ -33,13 +33,16 @@ local AutoBikeEnabled = true
 local LastTrigger = 0
 local TrapCooldown = 0.2
 
+local LastBicycleTrap = 0
+local BicycleTrapCooldown = 0.05
+
 local LastAutoTrapTD = 0
 local AutoTrapTDCooldown = 0.15
 
 local LastTackle = 0
 local TackleCooldown = 0.5
 
-local CLOSE_DISTANCE = 55
+local CLOSE_DISTANCE = 125
 
 local CHECK_INTERVAL = 0.03
 local TACKLE_RANGE = 8
@@ -236,6 +239,9 @@ UserInputService.InputBegan:Connect(function(
 
     --------------------------------------------------
     -- F2 = TRAP
+    -- Impact Shot
+    -- Explosive Kick
+    -- Impact Bicycle
     --------------------------------------------------
 
     if input.KeyCode == Enum.KeyCode.F2 then
@@ -457,6 +463,52 @@ Transceiver.OnClientEvent:Connect(function(
 end)
 
 --------------------------------------------------
+--// BICYCLE TRAP
+--// Impact Bicycle -> Black Hole Trap
+--------------------------------------------------
+
+Transceiver.OnClientEvent:Connect(function(
+    action,
+    player,
+    style,
+    skill,
+    ball
+)
+
+    if not TrapEnabled then
+        return
+    end
+
+    if action ~= "UseSkill" then
+        return
+    end
+
+    if skill ~= "Impact Bicycle" then
+        return
+    end
+
+    if player == LocalPlayer then
+        return
+    end
+
+    local Now = os.clock()
+
+    if Now - LastBicycleTrap
+        < BicycleTrapCooldown
+    then
+        return
+    end
+
+    LastBicycleTrap = Now
+
+    Transceiver:FireServer(
+        "UseSkill",
+        "Black Hole Trap"
+    )
+
+end)
+
+--------------------------------------------------
 --// AUTO TRAP TD
 --------------------------------------------------
 
@@ -492,41 +544,21 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    --------------------------------------------------
-    -- MUST BE ANOTHER PLAYER
-    --------------------------------------------------
-
     if player == LocalPlayer then
         return
     end
-
-    --------------------------------------------------
-    -- MUST BE A KICK
-    --------------------------------------------------
 
     if action ~= "Kick" then
         return
     end
 
-    --------------------------------------------------
-    -- MUST BE TOTAL DEFENSE
-    --------------------------------------------------
-
     if style ~= "Total Defense" then
         return
     end
 
-    --------------------------------------------------
-    -- MUST BE DEFENSIVE RUSH
-    --------------------------------------------------
-
     if skill ~= "Defensive Rush" then
         return
     end
-
-    --------------------------------------------------
-    -- VALID BALL CHECK
-    --------------------------------------------------
 
     if not IsBall(ball) then
         return
@@ -540,10 +572,6 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    --------------------------------------------------
-    -- COOLDOWN
-    --------------------------------------------------
-
     if os.clock() - LastAutoTrapTD
         < AutoTrapTDCooldown
     then
@@ -551,10 +579,6 @@ Transceiver.OnClientEvent:Connect(function(
     end
 
     LastAutoTrapTD = os.clock()
-
-    --------------------------------------------------
-    -- CREATIVE TRAP
-    --------------------------------------------------
 
     Transceiver:FireServer(
         "UseSkill",
@@ -646,25 +670,13 @@ local function tackle()
 
     end
 
-    --------------------------------------------------
-    -- TEAM CHECK
-    --------------------------------------------------
-
     if isSameTeam(holder) then
         return
     end
 
-    --------------------------------------------------
-    -- IFRAME CHECK
-    --------------------------------------------------
-
     if hasIFrames(holderCharacter) then
         return
     end
-
-    --------------------------------------------------
-    -- PREDICT BALL POSITION
-    --------------------------------------------------
 
     local predictedPosition =
         ball.Position
@@ -684,10 +696,6 @@ local function tackle()
 
     end
 
-    --------------------------------------------------
-    -- COOLDOWN
-    --------------------------------------------------
-
     if os.clock() - LastTackle
         < TackleCooldown
     then
@@ -695,10 +703,6 @@ local function tackle()
         return
 
     end
-
-    --------------------------------------------------
-    -- CHECK BEFORE FIRE
-    --------------------------------------------------
 
     if isSameTeam(holder) then
         return
@@ -714,25 +718,13 @@ local function tackle()
         "TackleBegin"
     )
 
-    --------------------------------------------------
-    -- FINAL TEAM CHECK
-    --------------------------------------------------
-
     if isSameTeam(holder) then
         return
     end
 
-    --------------------------------------------------
-    -- FINAL IFRAME CHECK
-    --------------------------------------------------
-
     if hasIFrames(holderCharacter) then
         return
     end
-
-    --------------------------------------------------
-    -- TACKLE
-    --------------------------------------------------
 
     SkillEvent:FireServer(
         "Tackle",
@@ -866,10 +858,6 @@ UserInputService.InputBegan:Connect(function(
     if not ImpactKey then
         return
     end
-
-    --------------------------------------------------
-    -- PRESS IMPACT BICYCLE SLOT
-    --------------------------------------------------
 
     if input.KeyCode == ImpactKey then
 
