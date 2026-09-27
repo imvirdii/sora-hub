@@ -468,6 +468,18 @@ local function IsBall(ball)
 
 end
 
+local function IsBallInLocalCharacter(ball)
+
+    local Character = LocalPlayer.Character
+
+    if not Character or not ball then
+        return false
+    end
+
+    return ball:IsDescendantOf(Character)
+
+end
+
 Transceiver.OnClientEvent:Connect(function(
     action,
     player,
@@ -480,17 +492,57 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
+    --------------------------------------------------
+    -- MUST BE ANOTHER PLAYER
+    --------------------------------------------------
+
     if player == LocalPlayer then
         return
     end
+
+    --------------------------------------------------
+    -- MUST BE A KICK
+    --------------------------------------------------
 
     if action ~= "Kick" then
         return
     end
 
+    --------------------------------------------------
+    -- MUST BE TOTAL DEFENSE
+    --------------------------------------------------
+
+    if style ~= "Total Defense" then
+        return
+    end
+
+    --------------------------------------------------
+    -- MUST BE DEFENSIVE RUSH
+    --------------------------------------------------
+
+    if skill ~= "Defensive Rush" then
+        return
+    end
+
+    --------------------------------------------------
+    -- VALID BALL CHECK
+    --------------------------------------------------
+
     if not IsBall(ball) then
         return
     end
+
+    --------------------------------------------------
+    -- ONLY TRAP IF BALL IS IN OUR CHARACTER
+    --------------------------------------------------
+
+    if not IsBallInLocalCharacter(ball) then
+        return
+    end
+
+    --------------------------------------------------
+    -- COOLDOWN
+    --------------------------------------------------
 
     if os.clock() - LastAutoTrapTD
         < AutoTrapTDCooldown
@@ -499,6 +551,10 @@ Transceiver.OnClientEvent:Connect(function(
     end
 
     LastAutoTrapTD = os.clock()
+
+    --------------------------------------------------
+    -- CREATIVE TRAP
+    --------------------------------------------------
 
     Transceiver:FireServer(
         "UseSkill",
