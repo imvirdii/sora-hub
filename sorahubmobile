@@ -35,6 +35,7 @@ local LastTackle = 0
 local TackleCooldown = 0.5
 
 local CLOSE_DISTANCE = 55
+local AUTO_TRAP_TD_DISTANCE = 30
 
 local CHECK_INTERVAL = 0.03
 local TACKLE_RANGE = 8
@@ -172,7 +173,6 @@ end
 --// MOBILE BUTTONS
 --------------------------------------------------
 
--- TRAP BUTTON
 TrapButton.Activated:Connect(function()
 
     TrapEnabled = not TrapEnabled
@@ -186,7 +186,6 @@ TrapButton.Activated:Connect(function()
 
 end)
 
--- TACKLE BUTTON
 TackleButton.Activated:Connect(function()
 
     TackleEnabled = not TackleEnabled
@@ -200,7 +199,6 @@ TackleButton.Activated:Connect(function()
 
 end)
 
--- AUTO TRAP TD BUTTON
 AutoTrapTDButton.Activated:Connect(function()
 
     AutoTrapTDEnabled =
@@ -235,13 +233,11 @@ UserInputService.InputBegan:Connect(function(
     if input.KeyCode == Enum.KeyCode.F2 then
 
         TrapEnabled = not TrapEnabled
-
         UpdateTrapGUI()
 
     elseif input.KeyCode == Enum.KeyCode.F3 then
 
         TackleEnabled = not TackleEnabled
-
         UpdateTackleGUI()
 
     elseif input.KeyCode == Enum.KeyCode.F4 then
@@ -294,7 +290,6 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    -- EXCEPTION CHECK
     if isExcluded(player) then
         return
     end
@@ -305,9 +300,7 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    if os.clock() - LastTrigger
-        < TrapCooldown
-    then
+    if os.clock() - LastTrigger < TrapCooldown then
         return
     end
 
@@ -363,41 +356,40 @@ end)
 --// AUTO TRAP TD
 --------------------------------------------------
 
-local function IsBall(ball)
+local function IsPlayerClose(player)
 
-    return ball
-        and ball:IsDescendantOf(workspace)
-        and ball.Name == "Ball"
-
-end
-
---------------------------------------------------
---// CHECK IF LOCAL PLAYER HAS BALL
---
--- Example:
--- Character.Ball.Ball
---------------------------------------------------
-
-local function LocalPlayerHasBall()
+    if not player or player == LocalPlayer then
+        return false
+    end
 
     local Character =
         LocalPlayer.Character
 
-    if not Character then
+    local OtherCharacter =
+        player.Character
+
+    if not Character or not OtherCharacter then
         return false
     end
 
-    local BallFolder =
-        Character:FindFirstChild("Ball")
+    local Root =
+        Character:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-    if not BallFolder then
+    local OtherRoot =
+        OtherCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
+
+    if not Root or not OtherRoot then
         return false
     end
 
-    local Ball =
-        BallFolder:FindFirstChild("Ball")
-
-    return Ball ~= nil
+    return (
+        Root.Position
+        - OtherRoot.Position
+    ).Magnitude <= AUTO_TRAP_TD_DISTANCE
 
 end
 
@@ -429,21 +421,15 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    if not IsBall(ball) then
+    if isExcluded(player) then
         return
     end
 
-    --------------------------------------------------
-    -- ONLY ACTIVATE IF WE CURRENTLY HAVE THE BALL
-    --------------------------------------------------
-
-    if not LocalPlayerHasBall() then
+    -- Only activate when the Defensive Rush player
+    -- is within 30 studs of the local player.
+    if not IsPlayerClose(player) then
         return
     end
-
-    --------------------------------------------------
-    -- COOLDOWN
-    --------------------------------------------------
 
     if os.clock() - LastAutoTrapTD
         < AutoTrapTDCooldown
@@ -452,10 +438,6 @@ Transceiver.OnClientEvent:Connect(function(
     end
 
     LastAutoTrapTD = os.clock()
-
-    --------------------------------------------------
-    -- CREATIVE TRAP
-    --------------------------------------------------
 
     Transceiver:FireServer(
         "UseSkill",
@@ -476,7 +458,6 @@ local function getBallHolder()
 
         if player ~= LocalPlayer then
 
-            -- EXCEPTION CHECK
             if not isExcluded(player) then
 
                 local character =
@@ -548,12 +529,10 @@ local function tackle()
         return
     end
 
-    -- EXCEPTION CHECK
     if isExcluded(holder) then
         return
     end
 
-    -- IFRAME CHECK
     if hasIFrames(holderCharacter) then
         return
     end
