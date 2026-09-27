@@ -11,10 +11,6 @@ local PunchRemote = ReplicatedStorage.Remotes.PunchRemote
 local TeamsFolder = ReplicatedStorage:WaitForChild("Teams")
 local EquippedSkills = LocalPlayer:WaitForChild("EquippedSkills")
 
---------------------------------------------------
---// PREVENT DUPLICATE SCRIPT
---------------------------------------------------
-
 if _G.TrapTackleHubRunning then
     return
 end
@@ -75,32 +71,19 @@ local ImpactSlot
 local ImpactKey
 
 for attributeName, keyCode in pairs(SlotKeys) do
-
-    local skill =
-        EquippedSkills:GetAttribute(attributeName)
+    local skill = EquippedSkills:GetAttribute(attributeName)
 
     if skill == "Impact Bicycle" then
-
         ImpactSlot = attributeName
         ImpactKey = keyCode
-
         break
     end
 end
 
 if not ImpactKey then
-
-    warn(
-        "Impact Bicycle was not found in EquippedSkills"
-    )
-
+    warn("Impact Bicycle was not found in EquippedSkills")
 else
-
-    print(
-        "Impact Bicycle found in:",
-        ImpactSlot
-    )
-
+    print("Impact Bicycle found in:", ImpactSlot)
 end
 
 --------------------------------------------------
@@ -132,8 +115,7 @@ local function CreateStatus(name, yPosition, text)
     Status.Font = Enum.Font.GothamBold
     Status.TextSize = 14
     Status.Text = text
-    Status.TextColor3 =
-        Color3.fromRGB(85, 255, 85)
+    Status.TextColor3 = Color3.fromRGB(85, 255, 85)
     Status.Parent = Frame
 
     return Status
@@ -170,58 +152,45 @@ local AutoBikeStatus = CreateStatus(
 local function UpdateStatus(Status, Enabled, Name)
 
     if Enabled then
-
         Status.Text = Name .. ": ON"
-        Status.TextColor3 =
-            Color3.fromRGB(85, 255, 85)
-
+        Status.TextColor3 = Color3.fromRGB(85, 255, 85)
     else
-
         Status.Text = Name .. ": OFF"
-        Status.TextColor3 =
-            Color3.fromRGB(255, 80, 80)
-
+        Status.TextColor3 = Color3.fromRGB(255, 80, 80)
     end
+
 end
 
 local function UpdateTrapGUI()
-
     UpdateStatus(
         TrapStatus,
         TrapEnabled,
         "TRAP"
     )
-
 end
 
 local function UpdateTackleGUI()
-
     UpdateStatus(
         TackleStatus,
         TackleEnabled,
         "TACKLE"
     )
-
 end
 
 local function UpdateAutoTrapTDGUI()
-
     UpdateStatus(
         AutoTrapTDStatus,
         AutoTrapTDEnabled,
         "AUTO TRAP TD"
     )
-
 end
 
 local function UpdateAutoBikeGUI()
-
     UpdateStatus(
         AutoBikeStatus,
         AutoBikeEnabled,
         "AUTO BIKE"
     )
-
 end
 
 --------------------------------------------------
@@ -520,15 +489,24 @@ local function IsBall(ball)
 
 end
 
-local function IsBallInLocalCharacter(ball)
+local function LocalPlayerHasBall()
 
     local Character = LocalPlayer.Character
 
-    if not Character or not ball then
+    if not Character then
         return false
     end
 
-    return ball:IsDescendantOf(Character)
+    -- Checks for:
+    -- Character.Ball.Ball
+
+    local BallFolder = Character:FindFirstChild("Ball")
+
+    if not BallFolder then
+        return false
+    end
+
+    return BallFolder:FindFirstChild("Ball") ~= nil
 
 end
 
@@ -565,10 +543,10 @@ Transceiver.OnClientEvent:Connect(function(
     end
 
     --------------------------------------------------
-    -- ONLY TRAP IF BALL IS IN OUR CHARACTER
+    -- ONLY TRAP IF LOCAL PLAYER CURRENTLY HAS BALL
     --------------------------------------------------
 
-    if not IsBallInLocalCharacter(ball) then
+    if not LocalPlayerHasBall() then
         return
     end
 
@@ -665,9 +643,7 @@ local function tackle()
         or not holderCharacter
         or not ball
     then
-
         return
-
     end
 
     if isSameTeam(holder) then
@@ -691,17 +667,13 @@ local function tackle()
             - predictedPosition
         ).Magnitude > TACKLE_RANGE
     then
-
         return
-
     end
 
     if os.clock() - LastTackle
         < TackleCooldown
     then
-
         return
-
     end
 
     if isSameTeam(holder) then
@@ -781,9 +753,7 @@ local function StartBikeLMBListener()
                 if mouseInput.UserInputType
                     ~= Enum.UserInputType.MouseButton1
                 then
-
                     return
-
                 end
 
                 BikeWaitingForLMB = false
