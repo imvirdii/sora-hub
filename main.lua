@@ -32,9 +32,6 @@ local TrapCooldown = 0.2
 local LastBicycleTrap = 0
 local BicycleTrapCooldown = 0.05
 
-local LastAutoTrapTD = 0
-local AutoTrapTDCooldown = 0.15
-
 local LastTackle = 0
 local TackleCooldown = 0.5
 
@@ -45,10 +42,16 @@ local TACKLE_RANGE = 8
 local PREDICTION_TIME = 0.12
 
 --------------------------------------------------
---// AUTO TRAP TD SETTINGS
+--// TD IMMUNITY SETTINGS
 --------------------------------------------------
 
-local AUTO_TRAP_TD_DISTANCE = 30
+local TD_IMMUNITY_DISTANCE = 30
+local TD_IMMUNITY_COOLDOWN = 0.15
+
+local FakeVolleyPending = false
+local PendingPlayer = nil
+
+local RushCooldown = false
 
 --------------------------------------------------
 --// AUTO BIKE SETTINGS
@@ -142,7 +145,7 @@ local TackleStatus = CreateStatus(
 local AutoTrapTDStatus = CreateStatus(
     "AutoTrapTDStatus",
     105,
-    "AUTO TRAP TD: ON"
+    "TD IMMUNITY: ON"
 )
 
 local AutoBikeStatus = CreateStatus(
@@ -187,7 +190,7 @@ local function UpdateAutoTrapTDGUI()
     UpdateStatus(
         AutoTrapTDStatus,
         AutoTrapTDEnabled,
-        "AUTO TRAP TD"
+        "TD IMMUNITY"
     )
 end
 
@@ -247,7 +250,7 @@ UserInputService.InputBegan:Connect(function(
     end
 
     --------------------------------------------------
-    -- F4 = AUTO TRAP TD
+    -- F4 = TD IMMUNITY
     --------------------------------------------------
 
     if input.KeyCode == Enum.KeyCode.F4 then
@@ -255,10 +258,15 @@ UserInputService.InputBegan:Connect(function(
         AutoTrapTDEnabled =
             not AutoTrapTDEnabled
 
+        if not AutoTrapTDEnabled then
+            FakeVolleyPending = false
+            PendingPlayer = nil
+        end
+
         UpdateAutoTrapTDGUI()
 
         print(
-            "Auto Trap TD:",
+            "TD Immunity:",
             AutoTrapTDEnabled and "ON" or "OFF"
         )
 
@@ -481,12 +489,19 @@ Transceiver.OnClientEvent:Connect(function(
 end)
 
 --------------------------------------------------
---// AUTO TRAP TD
---// Defensive Rush -> Creative Trap
---// Only when Defensive Rush player is close
+--// TD IMMUNITY
+--
+--// Defensive Stance:
+--// Start Fake Volley
+--
+--// Same player's Defensive Stance UseSkill:
+--// Finish Fake Volley
+--
+--// Defensive Rush:
+--// Creative Trap
 --------------------------------------------------
 
-local function IsPlayerClose(player)
+local function IsTDPlayerClose(player)
 
     if not player or player == LocalPlayer then
         return false
@@ -516,7 +531,7 @@ local function IsPlayerClose(player)
     return (
         Root.Position
         - OtherRoot.Position
-    ).Magnitude <= AUTO_TRAP_TD_DISTANCE
+    ).Magnitude <= TD_IMMUNITY_DISTANCE
 end
 
 Transceiver.OnClientEvent:Connect(function(
@@ -535,36 +550,98 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    if action ~= "Kick" then
-        return
-    end
+    --------------------------------------------------
+    -- DEFENSIVE STANCE
+    -- START FAKE VOLLEY
+    --------------------------------------------------
 
-    if style ~= "Total Defense" then
-        return
-    end
-
-    if skill ~= "Defensive Rush" then
-        return
-    end
-
-    -- Only activate when the Defensive Rush player is close
-    if not IsPlayerClose(player) then
-        return
-    end
-
-    if os.clock() - LastAutoTrapTD
-        < AutoTrapTDCooldown
+    if action == "Hold"
+        and style == "Total Defense"
+        and skill == "Defensive Stance"
     then
+
+        if not IsTDPlayerClose(player) then
+            return
+        end
+
+        if FakeVolleyPending then
+            return
+        end
+
+        FakeVolleyPending = true
+        PendingPlayer = player
+
+        Transceiver:FireServer(
+            "Hold",
+            "Fake Volley Shot"
+        )
+
         return
     end
 
-    LastAutoTrapTD = os.clock()
+    --------------------------------------------------
+    -- DEFENSIVE STANCE ACTUALLY USED
+    -- FINISH FAKE VOLLEY
+    --------------------------------------------------
 
-    Transceiver:FireServer(
-        "UseSkill",
-        "Creative Trap"
-    )
+    if action == "UseSkill"
+        and style == "Total Defense"
+        and skill == "Defensive Stance"
+    then
 
+        if not FakeVolleyPending then
+            return
+        end
+
+        if player ~= PendingPlayer then
+            return
+        end
+
+        Transceiver:FireServer(
+            "UseSkill",
+            "Fake Volley Shot"
+        )
+
+        FakeVolleyPending = false
+        PendingPlayer = nil
+
+        return
+    end
+
+    --------------------------------------------------
+    -- DEFENSIVE RUSH
+    -- CREATIVE TRAP
+    --------------------------------------------------
+
+    if action == "Kick"
+        and style == "Total Defense"
+        and skill == "Defensive Rush"
+    then
+
+        if not IsTDPlayerClose(player) then
+            return
+        end
+
+        if RushCooldown then
+            return
+        end
+
+        RushCooldown = true
+
+        Transceiver:FireServer(
+            "UseSkill",
+            "Creative Trap"
+        )
+
+        task.delay(
+            TD_IMMUNITY_COOLDOWN,
+            function()
+                RushCooldown = false
+            end
+        )
+
+        return
+    end
 end)
 
 --------------------------------------------------
