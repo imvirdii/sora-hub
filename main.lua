@@ -45,6 +45,12 @@ local TACKLE_RANGE = 8
 local PREDICTION_TIME = 0.12
 
 --------------------------------------------------
+--// AUTO TRAP TD SETTINGS
+--------------------------------------------------
+
+local AUTO_TRAP_TD_DISTANCE = 30
+
+--------------------------------------------------
 --// AUTO BIKE SETTINGS
 --------------------------------------------------
 
@@ -208,9 +214,6 @@ UserInputService.InputBegan:Connect(function(
 
     --------------------------------------------------
     -- F2 = TRAP
-    -- Impact Shot
-    -- Explosive Kick
-    -- Impact Bicycle
     --------------------------------------------------
 
     if input.KeyCode == Enum.KeyCode.F2 then
@@ -479,35 +482,41 @@ end)
 
 --------------------------------------------------
 --// AUTO TRAP TD
+--// Defensive Rush -> Creative Trap
+--// Only when Defensive Rush player is close
 --------------------------------------------------
 
-local function IsBall(ball)
+local function IsPlayerClose(player)
 
-    return ball
-        and ball:IsDescendantOf(workspace)
-        and ball.Name == "Ball"
-
-end
-
-local function LocalPlayerHasBall()
+    if not player or player == LocalPlayer then
+        return false
+    end
 
     local Character = LocalPlayer.Character
+    local OtherCharacter = player.Character
 
-    if not Character then
+    if not Character or not OtherCharacter then
         return false
     end
 
-    -- Checks for:
-    -- Character.Ball.Ball
+    local Root =
+        Character:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-    local BallFolder = Character:FindFirstChild("Ball")
+    local OtherRoot =
+        OtherCharacter:FindFirstChild(
+            "HumanoidRootPart"
+        )
 
-    if not BallFolder then
+    if not Root or not OtherRoot then
         return false
     end
 
-    return BallFolder:FindFirstChild("Ball") ~= nil
-
+    return (
+        Root.Position
+        - OtherRoot.Position
+    ).Magnitude <= AUTO_TRAP_TD_DISTANCE
 end
 
 Transceiver.OnClientEvent:Connect(function(
@@ -538,15 +547,8 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    if not IsBall(ball) then
-        return
-    end
-
-    --------------------------------------------------
-    -- ONLY TRAP IF LOCAL PLAYER CURRENTLY HAS BALL
-    --------------------------------------------------
-
-    if not LocalPlayerHasBall() then
+    -- Only activate when the Defensive Rush player is close
+    if not IsPlayerClose(player) then
         return
     end
 
@@ -661,11 +663,10 @@ local function tackle()
             * PREDICTION_TIME
         )
 
-    if
-        (
-            root.Position
-            - predictedPosition
-        ).Magnitude > TACKLE_RANGE
+    if (
+        root.Position
+        - predictedPosition
+    ).Magnitude > TACKLE_RANGE
     then
         return
     end
