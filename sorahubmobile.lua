@@ -23,23 +23,31 @@ _G.TrapTackleHubRunning = true
 
 local TrapEnabled = true
 local TackleEnabled = true
-local AutoTrapTDEnabled = true
+local TDImmunityEnabled = true
 
 local LastTrigger = 0
 local TrapCooldown = 0.2
-
-local LastAutoTrapTD = 0
-local AutoTrapTDCooldown = 0.15
 
 local LastTackle = 0
 local TackleCooldown = 0.5
 
 local CLOSE_DISTANCE = 55
-local AUTO_TRAP_TD_DISTANCE = 30
+
+local TD_IMMUNITY_DISTANCE = 30
+local TD_IMMUNITY_COOLDOWN = 0.15
 
 local CHECK_INTERVAL = 0.03
 local TACKLE_RANGE = 8
 local PREDICTION_TIME = 0.12
+
+--------------------------------------------------
+--// TD IMMUNITY STATE
+--------------------------------------------------
+
+local FakeVolleyPending = false
+local PendingPlayer = nil
+
+local RushCooldown = false
 
 --------------------------------------------------
 --// EXCEPTION LIST
@@ -57,6 +65,7 @@ local function isExcluded(player)
     end
 
     return ExceptionList[player.Name] == true
+
 end
 
 --------------------------------------------------
@@ -111,11 +120,129 @@ local TackleButton = CreateStatus(
     "TACKLE: ON"
 )
 
-local AutoTrapTDButton = CreateStatus(
-    "AutoTrapTDButton",
+local TDImmunityButton = CreateStatus(
+    "TDImmunityButton",
     135,
-    "AUTO TRAP TD: ON"
+    "TD IMMUNITY: ON"
 )
+
+--------------------------------------------------
+--// DRAG + TAP SYSTEM
+--------------------------------------------------
+-- Tap = toggle
+-- Drag = move
+--------------------------------------------------
+
+local function MakeDraggable(Button, ToggleFunction)
+
+    local Dragging = false
+    local DragStart = nil
+    local StartPosition = nil
+    local DragInput = nil
+
+    local HasMoved = false
+    local DRAG_THRESHOLD = 8
+
+    --------------------------------------------------
+    --// UPDATE POSITION
+    --------------------------------------------------
+
+    local function UpdatePosition(input)
+
+        local Delta =
+            input.Position - DragStart
+
+        if math.abs(Delta.X) > DRAG_THRESHOLD
+            or math.abs(Delta.Y) > DRAG_THRESHOLD
+        then
+            HasMoved = true
+        end
+
+        Button.Position = UDim2.new(
+            StartPosition.X.Scale,
+            StartPosition.X.Offset + Delta.X,
+            StartPosition.Y.Scale,
+            StartPosition.Y.Offset + Delta.Y
+        )
+
+    end
+
+    --------------------------------------------------
+    --// INPUT START
+    --------------------------------------------------
+
+    Button.InputBegan:Connect(function(input)
+
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch
+        then
+            return
+        end
+
+        Dragging = true
+        HasMoved = false
+
+        DragStart = input.Position
+        StartPosition = Button.Position
+
+        input.Changed:Connect(function()
+
+            if input.UserInputState == Enum.UserInputState.End then
+
+                Dragging = false
+
+                --------------------------------------------------
+                -- ONLY TOGGLE IF IT WAS A TAP
+                --------------------------------------------------
+
+                if not HasMoved then
+                    ToggleFunction()
+                end
+
+            end
+
+        end)
+
+    end)
+
+    --------------------------------------------------
+    --// INPUT CHANGED
+    --------------------------------------------------
+
+    Button.InputChanged:Connect(function(input)
+
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch
+        then
+
+            DragInput = input
+
+        end
+
+    end)
+
+    --------------------------------------------------
+    --// DRAG MOVEMENT
+    --------------------------------------------------
+
+    UserInputService.InputChanged:Connect(function(input)
+
+        if not Dragging then
+            return
+        end
+
+        if input == DragInput
+            or input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch
+        then
+
+            UpdatePosition(input)
+
+        end
+
+    end)
+
+end
 
 --------------------------------------------------
 --// GUI UPDATES
@@ -159,21 +286,21 @@ local function UpdateTackleGUI()
 
 end
 
-local function UpdateAutoTrapTDGUI()
+local function UpdateTDImmunityGUI()
 
     UpdateButton(
-        AutoTrapTDButton,
-        AutoTrapTDEnabled,
-        "AUTO TRAP TD"
+        TDImmunityButton,
+        TDImmunityEnabled,
+        "TD IMMUNITY"
     )
 
 end
 
 --------------------------------------------------
---// MOBILE BUTTONS
+--// BUTTON TOGGLE FUNCTIONS
 --------------------------------------------------
 
-TrapButton.Activated:Connect(function()
+local function ToggleTrap()
 
     TrapEnabled = not TrapEnabled
 
@@ -184,9 +311,9 @@ TrapButton.Activated:Connect(function()
         TrapEnabled and "ON" or "OFF"
     )
 
-end)
+end
 
-TackleButton.Activated:Connect(function()
+local function ToggleTackle()
 
     TackleEnabled = not TackleEnabled
 
@@ -197,28 +324,54 @@ TackleButton.Activated:Connect(function()
         TackleEnabled and "ON" or "OFF"
     )
 
-end)
+end
 
-AutoTrapTDButton.Activated:Connect(function()
+local function ToggleTDImmunity()
 
-    AutoTrapTDEnabled =
-        not AutoTrapTDEnabled
+    TDImmunityEnabled =
+        not TDImmunityEnabled
 
-    UpdateAutoTrapTDGUI()
+    if not TDImmunityEnabled then
+
+        FakeVolleyPending = false
+        PendingPlayer = nil
+
+    end
+
+    UpdateTDImmunityGUI()
 
     print(
-        "Auto Trap TD:",
-        AutoTrapTDEnabled and "ON" or "OFF"
+        "TD Immunity:",
+        TDImmunityEnabled and "ON" or "OFF"
     )
 
-end)
+end
+
+--------------------------------------------------
+--// MAKE BUTTONS DRAGGABLE
+--------------------------------------------------
+
+MakeDraggable(
+    TrapButton,
+    ToggleTrap
+)
+
+MakeDraggable(
+    TackleButton,
+    ToggleTackle
+)
+
+MakeDraggable(
+    TDImmunityButton,
+    ToggleTDImmunity
+)
 
 --------------------------------------------------
 --// OPTIONAL KEYBOARD CONTROLS
 --------------------------------------------------
 -- F2 = Trap
 -- F3 = Tackle
--- F4 = Auto Trap TD
+-- F4 = TD Immunity
 --------------------------------------------------
 
 UserInputService.InputBegan:Connect(function(
@@ -232,20 +385,15 @@ UserInputService.InputBegan:Connect(function(
 
     if input.KeyCode == Enum.KeyCode.F2 then
 
-        TrapEnabled = not TrapEnabled
-        UpdateTrapGUI()
+        ToggleTrap()
 
     elseif input.KeyCode == Enum.KeyCode.F3 then
 
-        TackleEnabled = not TackleEnabled
-        UpdateTackleGUI()
+        ToggleTackle()
 
     elseif input.KeyCode == Enum.KeyCode.F4 then
 
-        AutoTrapTDEnabled =
-            not AutoTrapTDEnabled
-
-        UpdateAutoTrapTDGUI()
+        ToggleTDImmunity()
 
     end
 
@@ -353,10 +501,10 @@ Transceiver.OnClientEvent:Connect(function(
 end)
 
 --------------------------------------------------
---// AUTO TRAP TD
+--// TD IMMUNITY DISTANCE CHECK
 --------------------------------------------------
 
-local function IsPlayerClose(player)
+local function IsTDPlayerClose(player)
 
     if not player or player == LocalPlayer then
         return false
@@ -389,9 +537,17 @@ local function IsPlayerClose(player)
     return (
         Root.Position
         - OtherRoot.Position
-    ).Magnitude <= AUTO_TRAP_TD_DISTANCE
+    ).Magnitude <= TD_IMMUNITY_DISTANCE
 
 end
+
+--------------------------------------------------
+--// TD IMMUNITY
+--
+--// Defensive Stance -> Fake Volley
+--// TD actually used -> Finish Fake Volley
+--// Defensive Rush -> Creative Trap
+--------------------------------------------------
 
 Transceiver.OnClientEvent:Connect(function(
     action,
@@ -401,7 +557,7 @@ Transceiver.OnClientEvent:Connect(function(
     ball
 )
 
-    if not AutoTrapTDEnabled then
+    if not TDImmunityEnabled then
         return
     end
 
@@ -409,40 +565,104 @@ Transceiver.OnClientEvent:Connect(function(
         return
     end
 
-    if action ~= "Kick" then
-        return
-    end
-
-    if style ~= "Total Defense" then
-        return
-    end
-
-    if skill ~= "Defensive Rush" then
-        return
-    end
-
     if isExcluded(player) then
         return
     end
 
-    -- Only activate when the Defensive Rush player
-    -- is within 30 studs of the local player.
-    if not IsPlayerClose(player) then
-        return
-    end
+    --------------------------------------------------
+    -- DEFENSIVE STANCE
+    -- START FAKE VOLLEY
+    --------------------------------------------------
 
-    if os.clock() - LastAutoTrapTD
-        < AutoTrapTDCooldown
+    if action == "Hold"
+        and style == "Total Defense"
+        and skill == "Defensive Stance"
     then
+
+        if not IsTDPlayerClose(player) then
+            return
+        end
+
+        if FakeVolleyPending then
+            return
+        end
+
+        FakeVolleyPending = true
+        PendingPlayer = player
+
+        Transceiver:FireServer(
+            "Hold",
+            "Fake Volley Shot"
+        )
+
         return
     end
 
-    LastAutoTrapTD = os.clock()
+    --------------------------------------------------
+    -- DEFENSIVE STANCE ACTUALLY GETS USED
+    -- FINISH FAKE VOLLEY
+    --------------------------------------------------
 
-    Transceiver:FireServer(
-        "UseSkill",
-        "Creative Trap"
-    )
+    if action == "UseSkill"
+        and style == "Total Defense"
+        and skill == "Defensive Stance"
+    then
+
+        if not FakeVolleyPending then
+            return
+        end
+
+        if player ~= PendingPlayer then
+            return
+        end
+
+        Transceiver:FireServer(
+            "UseSkill",
+            "Fake Volley Shot"
+        )
+
+        FakeVolleyPending = false
+        PendingPlayer = nil
+
+        return
+    end
+
+    --------------------------------------------------
+    -- DEFENSIVE RUSH
+    -- CREATIVE TRAP
+    --------------------------------------------------
+
+    if action == "Kick"
+        and style == "Total Defense"
+        and skill == "Defensive Rush"
+    then
+
+        if not IsTDPlayerClose(player) then
+            return
+        end
+
+        if RushCooldown then
+            return
+        end
+
+        RushCooldown = true
+
+        Transceiver:FireServer(
+            "UseSkill",
+            "Creative Trap"
+        )
+
+        task.delay(
+            TD_IMMUNITY_COOLDOWN,
+            function()
+
+                RushCooldown = false
+
+            end
+        )
+
+        return
+    end
 
 end)
 
@@ -616,4 +836,4 @@ end)
 
 UpdateTrapGUI()
 UpdateTackleGUI()
-UpdateAutoTrapTDGUI()
+UpdateTDImmunityGUI()
