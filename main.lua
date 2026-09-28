@@ -1,3 +1,6 @@
+-- Sora Hub | Custom UI, no third-party UI library.
+-- Client script; requires the same execution environment as the source project.
+-- F1 Bike | F2 Trap | F3 Tackle | F4 TD Immunity | F5 Auto M2 | Space Aim | End Menu
 
 local Env = getgenv()
 if Env.SoraHubSession then
@@ -74,9 +77,53 @@ listen(UIInput.InputEnded,function(input) if input==dragging then dragging=nil e
 local nav=ui('Frame',root,{BackgroundTransparency=1,Position=UDim2.fromOffset(16,76),Size=UDim2.new(1,-32,0,32)})
 ui('UIListLayout',nav,{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,8)})
 local footer=label(root,'F1 Bike   F2 Trap   F3 Tackle   F4 TD   F5 M2   Space Aim',10)
+footer.TextScaled=true
 footer.Position=UDim2.new(0,18,1,-28); footer.TextColor3=muted
 local pages={}
 local keys={}
+local keyControls={}
+local pendingKey, capturedInput
+local function keyHints()
+    local hints={}
+    for _,key in ipairs(keyControls) do
+        if key.Value~='None' then table.insert(hints,key.Value..' '..key.ShortName) end
+    end
+    return table.concat(hints,'   ')
+end
+local function beginKeyCapture(key)
+    if pendingKey then pendingKey:Refresh() end
+    pendingKey=key
+    key.Button.Text='Press key...'
+    Library:Notify('Press a key. Escape: cancel | Backspace: unbind',8)
+end
+local function createKeyControl(id, name, default, button, callback, badge)
+    local key={Value='None',Default=default,Name=name,ShortName=name,Button=button}
+    function key:Refresh()
+        if self.Button then self.Button.Text=self.Name..': '..self.Value end
+        if badge then badge.Text=self.Value end
+    end
+    function key:SetValue(value)
+        if value~='None' and (not Enum.KeyCode[value] or value=='Unknown' or value=='Escape' or value=='Backspace') then return false end
+        for _,other in ipairs(keyControls) do
+            if other~=self and value~='None' and other.Value==value then
+                Library:Notify(value..' is already assigned to '..other.Name,4)
+                return false
+            end
+        end
+        if self.Value~='None' then keys[self.Value]=nil end
+        self.Value=value
+        if value~='None' then keys[value]=callback end
+        if id=='SoraMenuKey' then menuKey=value end
+        self:Refresh()
+        footer.Text=keyHints()
+        return true
+    end
+    Options[id]=key
+    table.insert(keyControls,key)
+    key:SetValue(default)
+    if button then listen(button.Activated,function() beginKeyCapture(key) end) end
+    return key
+end
 local function row(parent,height)
     return ui('Frame',parent,{Size=UDim2.new(1,0,0,height or 36),BackgroundTransparency=1})
 end
@@ -97,12 +144,11 @@ local function groupMethods(parent)
         end
         function control:OnChanged(callback) self.Callback=callback end
         function control:AddKeyPicker(keyId,keyInfo)
-            local key={Value=keyInfo.Default}
-            Options[keyId]=key
-            keys[keyInfo.Default]=function() self:SetValue(not self.Value) end
             local badge=label(holder,keyInfo.Default,9)
             badge.TextColor3=muted; badge.TextXAlignment=Enum.TextXAlignment.Right
-            badge.Size=UDim2.fromOffset(35,20); badge.Position=UDim2.new(1,-84,0.5,-10)
+            badge.Size=UDim2.fromOffset(70,20); badge.Position=UDim2.new(1,-119,0.5,-10)
+            caption.Size=UDim2.new(1,-125,1,0)
+            createKeyControl(keyId,keyInfo.Text,keyInfo.Default,nil,function() self:SetValue(not self.Value) end,badge)
             return self
         end
         control:SetValue(control.Value)
@@ -220,7 +266,7 @@ end
 function Library:Notify(text,duration)
     footer.Text=text
     task.delay(duration or 4,function()
-        if not self.Unloaded then footer.Text='F1 Bike   F2 Trap   F3 Tackle   F4 TD   F5 M2   Space Aim' end
+        if not self.Unloaded then footer.Text=keyHints() end
     end)
 end
 function Library:OnUnload(callback) self.UnloadCallback=callback end
@@ -233,9 +279,22 @@ function Library:Unload()
 end
 listen(UIInput.InputBegan,function(input,processed)
     if UIInput:GetFocusedTextBox() then return end
+    if pendingKey then
+        capturedInput=input
+        if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+        local key=pendingKey
+        local name=input.KeyCode.Name
+        if name=='Escape' then
+            pendingKey=nil; key:Refresh(); footer.Text=keyHints()
+        elseif key:SetValue(name=='Backspace' and 'None' or name) then
+            pendingKey=nil
+        end
+        return
+    end
     if input.KeyCode.Name==menuKey then visibility(); return end
-    -- Space remains usable when Roblox handles it as a jump input.
-    if processed and input.KeyCode~=Enum.KeyCode.Space then return end
+    -- Preserve standalone aim input even when Roblox handles the rebound key.
+    local aimKey=Options.SoraAutoAimKey
+    if processed and not (aimKey and input.KeyCode.Name==aimKey.Value) then return end
     local callback=keys[input.KeyCode.Name]
     if callback then callback() end
 end)
@@ -254,7 +313,7 @@ local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false,
-    AutoM2 = false, AutoAim = false, AimAllowed = true, AutoBike = true,
+    AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75,
 }
@@ -262,6 +321,7 @@ local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
 local pendingPlayer, pendingAt, bikeArmed = nil, 0, false
 local lastTrap, lastBikeTrap, lastRush, lastTackle, lastM2 = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
+local lastAutoTD,tdFacingUntil,tdAimPosition=-math.huge,0,nil
 local lastOwner, wasSprinting, dashDirection
 local rotationHumanoid, originalAutoRotate
 local camera, cameraConnection, originalFOV
@@ -316,13 +376,44 @@ local function refreshSpeed()
         speedConnection = Humanoid:GetPropertyChangedSignal('WalkSpeed'):Connect(applySpeed)
     end
 end
+-- PowerLocal.TakeBall uses this animation with Action3 priority.
+local takeBallAnimation=Instance.new('Animation')
+takeBallAnimation.AnimationId='rbxassetid://12698914098'
+local takeBallTrack, takeBallAnimator
+local lastTakeBallAnimation=-math.huge
+local function clearTakeBallAnimation()
+    if takeBallTrack then
+        takeBallTrack:Stop(0.1)
+        takeBallTrack:Destroy()
+    end
+    takeBallTrack,takeBallAnimator=nil,nil
+    lastTakeBallAnimation=-math.huge
+end
+local function playTakeBallAnimation(now)
+    if not Humanoid or not Humanoid.Parent or Humanoid.Health<=0 then return end
+    local animator=Humanoid:FindFirstChildOfClass('Animator')
+    if not animator then return end
+    if takeBallAnimator~=animator then clearTakeBallAnimation() end
+    if now-lastTakeBallAnimation<1 or (takeBallTrack and takeBallTrack.IsPlaying) then return end
+    lastTakeBallAnimation=now
+    if not takeBallTrack then
+        local ok,track=pcall(function() return animator:LoadAnimation(takeBallAnimation) end)
+        if not ok then return end
+        takeBallTrack,takeBallAnimator=track,animator
+        takeBallTrack.Priority=Enum.AnimationPriority.Action3
+        takeBallTrack.Looped=false
+    end
+    takeBallTrack:Play(0.1)
+end
 local function bindCharacter(newCharacter)
+    clearTakeBallAnimation()
     releaseRotation()
     if speedConnection then speedConnection:Disconnect() end
     restoreSpeed()
     Character, Root, Humanoid = newCharacter, nil, nil
     speedBase, speedWritten, pendingPlayer, bikeArmed = nil, nil, nil, false
     wasSprinting, dashDirection = false, nil
+    tdFacingUntil,tdAimPosition=0,nil
     local newRoot = newCharacter:WaitForChild('HumanoidRootPart', 10)
     local newHumanoid = newCharacter:WaitForChild('Humanoid', 10)
     if not Session.Alive or Character ~= newCharacter then return end
@@ -377,8 +468,18 @@ end
 
 toggle(Defense, 'AutoTrap', 'Auto Trap', 'F2')
 toggle(Defense, 'AutoTackle', 'Auto Tackle', 'F3')
+toggle(Defense, 'AutoTD', 'Auto TD', 'F6', function(enabled)
+    if not enabled then tdFacingUntil,tdAimPosition=0,nil; releaseRotation() end
+end)
+Defense:AddSlider('SoraTDRange',{Text='Auto TD Range',Default=8,Min=4,Max=25,Rounding=0})
+Options.SoraTDRange:OnChanged(function() State.TDRange=Options.SoraTDRange.Value end)
+Defense:AddSlider('SoraTDPrediction',{Text='Auto TD Prediction (seconds)',Default=0.12,Min=0,Max=0.25,Rounding=2})
+Options.SoraTDPrediction:OnChanged(function() State.TDPrediction=Options.SoraTDPrediction.Value end)
+
 toggle(Defense, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil end)
-toggle(Defense, 'AutoM2', 'Auto M2', 'F5')
+toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
+    if not enabled then clearTakeBallAnimation() end
+end)
 toggle(Defense, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
 toggle(Aim, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
@@ -539,7 +640,7 @@ Defense:AddButton({Text='Rescan Auto Bike Slot', Func=function()
     end
 end})
 local function bikeInput(input, processed)
-    if not Session.Alive or not State.AutoBike then return end
+    if not Session.Alive or not State.AutoBike or pendingKey or input==capturedInput then return end
     -- The original LMB listener does NOT reject gameProcessed input.
     -- Only the slot-selection input uses that filter.
     if bikeArmed and input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -597,62 +698,182 @@ local function bicycleTrap(players, now)
         end
     end
 end
+local function tdReady(now)
+    if not State.AutoTD or now-lastAutoTD<0.5 or now-lastTackle<0.5 then return false end
+    if not Character or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('Ball') then return false end
+    if Player:GetAttribute('UsingSkill') or Character:FindFirstChild('HoldingSkill') then return false end
+    if workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false end
+    local playerState=Player:FindFirstChild('PlayerStateFolder')
+    if playerState and playerState:FindFirstChild('Stun') then return false end
+    local cooldowns=RS:FindFirstChild('CooldownsFolder')
+    if cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..'Defensive Rush') then return false end
+    return true
+end
+local function rushTargetValid(target)
+    return target.player.Character==target.character
+        and target.ball:IsDescendantOf(target.character)
+        and target.root.Parent==target.character
+        and target.humanoid.Health>0
+        and not sameTeam(target.player) and not iframes(target.character)
+        and (target.ball.Position-Root.Position).Magnitude<=State.TDRange
+end
+local function startAutoTD(target,now)
+    if not tdReady(now) or not rushTargetValid(target) then return false end
+    -- Use the holder's velocity: a carried ball's assembly velocity can be noisy.
+    local lead=target.root.AssemblyLinearVelocity*State.TDPrediction
+    lead=Vector3.new(lead.X,0,lead.Z)
+    if lead.Magnitude>3 then lead=lead.Unit*3 end
+    local predicted=target.ball.Position+lead
+    local flatTarget=Vector3.new(predicted.X,Root.Position.Y,predicted.Z)
+    if (flatTarget-Root.Position).Magnitude<0.001 then return false end
+    lockRotation()
+    Root.CFrame=CFrame.new(Root.Position,flatTarget)
+    tdAimPosition,tdFacingUntil=flatTarget,now+0.2
+    lastAutoTD=now
+    Event:FireServer('UseSkill','Defensive Rush')
+    return true
+end
 local function defenseStep(now)
-    local players = Players:GetPlayers()
-    if State.AutoTrap then bicycleTrap(players, now) end
+    local players=Players:GetPlayers()
+    if State.AutoTrap then bicycleTrap(players,now) end
     if not Root or not Root.Parent or not Character then return end
-    for _, player in ipairs(players) do
-        if player ~= Player then
-            local character = player.Character
-            local root = character and character:FindFirstChild('HumanoidRootPart')
-            local folder = character and character:FindFirstChild('Ball')
-            local ball = folder and folder:FindFirstChild('Ball')
+    local canRush=tdReady(now)
+    local myTeam=canRush and getTeam(Player) or nil
+    local rushTarget,rushDistance=nil,math.huge
+    local tackleTarget,tackleDistance=nil,math.huge
+    for _,player in ipairs(players) do
+        if player~=Player then
+            local character=player.Character
+            local root=character and character:FindFirstChild('HumanoidRootPart')
+            local folder=character and character:FindFirstChild('Ball')
+            local ball=folder and folder:FindFirstChild('Ball')
             if root and ball and ball:IsA('BasePart') then
-                -- Auto M2 preserves the supplied targeting behavior; tackle checks teams.
-                if State.AutoM2 and not Character:FindFirstChild('Ball') and now-lastM2 >= 0.1 and (root.Position-Root.Position).Magnitude <= 23 then
-                    lastM2 = now
-                    Punch:FireServer('TakeBall', ball)
+                local holderDistance=(root.Position-Root.Position).Magnitude
+                -- Keep Auto M2's original 23-stud activation; animate only within 8.
+                if State.AutoM2 and not Character:FindFirstChild('Ball') and now-lastM2>=0.1 and holderDistance<=23 then
+                    lastM2=now
+                    if holderDistance<=8 then playTakeBallAnimation(now) end
+                    Punch:FireServer('TakeBall',ball)
                 end
-                if State.AutoTackle and now-lastTackle >= 0.5 and not sameTeam(player) and not iframes(character) then
-                    local predicted = ball.Position+ball.AssemblyLinearVelocity*0.12
-                    if (Root.Position-predicted).Magnitude <= 8 then
-                        lastTackle = now
-                        Tackle:FireServer('TackleBegin')
-                        if not sameTeam(player) and not iframes(character) and ball:IsDescendantOf(character) then
-                            Tackle:FireServer('Tackle', ball, Root.CFrame*CFrame.new(0,-1.5,0))
-                        end
+                if canRush and not iframes(character) then
+                    local theirTeam=getTeam(player)
+                    local humanoid=character:FindFirstChildOfClass('Humanoid')
+                    local distance=(ball.Position-Root.Position).Magnitude
+                    if (not myTeam or theirTeam~=myTeam) and humanoid and humanoid.Health>0
+                        and distance<=State.TDRange and distance<rushDistance then
+                        rushDistance=distance
+                        rushTarget={player=player,character=character,root=root,humanoid=humanoid,ball=ball}
+                    end
+                end
+                if State.AutoTackle and now-lastTackle>=0.5 and now-lastAutoTD>=0.5
+                    and not sameTeam(player) and not iframes(character) then
+                    local predicted=ball.Position+ball.AssemblyLinearVelocity*0.12
+                    local distance=(Root.Position-predicted).Magnitude
+                    if distance<=8 and distance<tackleDistance then
+                        tackleDistance=distance
+                        tackleTarget={player=player,character=character,ball=ball}
                     end
                 end
             end
         end
     end
+    -- Prefer a ready Defensive Rush, with one defensive skill request per scan.
+    if rushTarget and startAutoTD(rushTarget,now) then return end
+    if tackleTarget then
+        local target=tackleTarget
+        if sameTeam(target.player) or iframes(target.character) or not target.ball:IsDescendantOf(target.character) then return end
+        lastTackle=now
+        Tackle:FireServer('TackleBegin')
+        Tackle:FireServer('Tackle',target.ball,Root.CFrame*CFrame.new(0,-1.5,0))
+    end
 end
 
-local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Include
+-- These targets are helpers created by the original hub, not game-owned objects.
+-- Keep our own copies so Auto Aim also works in a fresh session.
+local aimGeometry,aimCorners,aimWalls
+local function ensureAimGeometry()
+    if not aimGeometry or not aimGeometry.Parent then
+        aimGeometry=Instance.new('Folder')
+        aimGeometry.Name='SoraHubAimGeometry'
+        aimGeometry.Parent=workspace
+        aimCorners=Instance.new('Folder')
+        aimCorners.Name='Corners'
+        aimCorners.Parent=aimGeometry
+        aimWalls=Instance.new('Folder')
+        aimWalls.Name='FinalWalls'
+        aimWalls.Parent=aimGeometry
+    end
+    local mini=workspace:GetAttribute('GameField')=='MiniField'
+    local y=mini and Root.Position.Y or -92
+    local x1,x2=mini and -669 or -464.5,mini and -1113 or -1107.5
+    local z1,z2=mini and 372.5 or -369,mini and 401 or -341
+    for i=1,4 do
+        local name='Corner'..i
+        local part=aimCorners:FindFirstChild(name)
+        if not part then
+            part=Instance.new('Part')
+            part.Name=name
+            part.Anchored=true
+            part.CanCollide=false
+            part.CanTouch=false
+            part.CanQuery=false
+            part.Transparency=1
+            part.Size=Vector3.new(1,1,1)
+            part.Parent=aimCorners
+        end
+        part.Position=Vector3.new(i<=2 and x1 or x2,y,i%2==1 and z1 or z2)
+    end
+    for i=1,2 do
+        local name='FinalWall'..i
+        local part=aimWalls:FindFirstChild(name)
+        if not part then
+            part=Instance.new('Part')
+            part.Name=name
+            part.Anchored=true
+            part.CanCollide=false
+            part.CanTouch=false
+            part.CanQuery=true
+            part.Transparency=1
+            part.Size=Vector3.new(0.1,2048,2048)
+            part.Parent=aimWalls
+        end
+        part.Position=Vector3.new(i==1 and x1 or x2,mini and y or -90,z1)
+    end
+    return aimCorners,aimWalls
+end
 local function aimStep()
-    if not State.AutoAim or not State.AimAllowed or not Root or not Root.Parent or not Humanoid or Humanoid.Health <= 0 then
+    if not State.AutoAim or not State.AimAllowed then
         releaseRotation(); return false
     end
-    local corners, walls = workspace:FindFirstChild('Corners'), workspace:FindFirstChild('FinalWalls')
-    local currentCamera = workspace.CurrentCamera
-    if not corners or not walls or not currentCamera then releaseRotation(); return false end
-    rayParams.FilterDescendantsInstances = { walls }
-    local hit = workspace:Raycast(currentCamera.CFrame.Position, currentCamera.CFrame.LookVector*10000, rayParams)
-    if not hit then releaseRotation(); return false end
-    local target, minimum = nil, math.huge
+    if not Root or not Root.Parent or not Humanoid or Humanoid.Health<=0 then return false end
+    local corners,walls=ensureAimGeometry()
+    local currentCamera=workspace.CurrentCamera
+    if not corners or not walls or not currentCamera then return false end
+
+    -- Match the supplied standalone ray and nearest-corner selection.
+    local rayParams=RaycastParams.new()
+    rayParams.FilterDescendantsInstances=walls:GetChildren()
+    rayParams.FilterType=Enum.RaycastFilterType.Include
+    local hit=workspace:Raycast(currentCamera.CFrame.Position,currentCamera.CFrame.LookVector*10000,rayParams)
+    if not hit then return false end
+    local target,minimum=nil,math.huge
     for i=1,4 do
-        local corner = corners:FindFirstChild('Corner' .. i)
-        if corner and corner:IsA('BasePart') then
-            local distance = (hit.Position-corner.Position).Magnitude
-            if distance < minimum then target, minimum = corner.Position, distance end
+        local corner=corners:FindFirstChild('Corner'..i)
+        if corner then
+            local ok,position=pcall(function() return corner.Position end)
+            if ok and typeof(position)=='Vector3' then
+                local distance=(hit.Position-position).Magnitude
+                if distance<minimum then target,minimum=position,distance end
+            end
         end
     end
-    if not target then releaseRotation(); return false end
-    local flatTarget = Vector3.new(target.X, Root.Position.Y, target.Z)
-    if (flatTarget-Root.Position).Magnitude < 0.001 then releaseRotation(); return false end
+    if not target then return false end
+    local targetPosition=Vector3.new(target.X,Root.Position.Y,target.Z)
+    local delta=targetPosition-Root.Position
+    if delta.Magnitude<0.001 then return false end
+    local direction=delta.Unit
     lockRotation()
-    Root.CFrame = CFrame.new(Root.Position, flatTarget)
+    Root.CFrame=CFrame.new(Root.Position,Root.Position+direction)
     return true
 end
 local function movementStep()
@@ -786,14 +1007,25 @@ connect(RunService.Heartbeat, function(dt)
     elapsed = elapsed+dt
     if elapsed >= 0.03 then
         elapsed = 0
-        if State.AutoTrap or State.AutoTackle or State.AutoM2 then defenseStep(os.clock()) end
+        if State.AutoTrap or State.AutoTackle or State.AutoM2 or State.AutoTD then defenseStep(os.clock()) end
         if pendingPlayer and os.clock()-pendingAt > 5 then pendingPlayer = nil end
     end
 end)
-connect(RunService.RenderStepped, function()
+local aimRenderName='SoraHubAim'
+RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
-    local aiming = aimStep()
-    if not aiming and State.SpeedDemon and dashDirection and Root and Root.Parent then
+    if State.AutoTD and tdAimPosition and os.clock()<tdFacingUntil and Root and Root.Parent
+        and Humanoid and Humanoid.Health>0 then
+        local target=Vector3.new(tdAimPosition.X,Root.Position.Y,tdAimPosition.Z)
+        if (target-Root.Position).Magnitude>0.001 then
+            lockRotation()
+            Root.CFrame=CFrame.new(Root.Position,target)
+        end
+        return
+    end
+    tdAimPosition=nil
+    aimStep()
+    if not (State.AutoAim and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
     end
 end)
@@ -844,24 +1076,41 @@ Layout:AddSlider('SoraUITransparency',{Text='Window Transparency (%)',Default=0,
 Options.SoraUITransparency:OnChanged(function() root.BackgroundTransparency=Options.SoraUITransparency.Value/100 end)
 State.ShowKeyHints=true
 toggle(Layout,'ShowKeyHints','Show Keybind Hints',nil,function(value) footer.Visible=value end)
-Layout:AddDropdown('SoraMenuKeyChoice',{Text='Show / Hide Key',Values={'End','Insert','RightShift','Home'},Default=1})
-Options.SoraMenuKeyChoice:OnChanged(function()
-    menuKey=Options.SoraMenuKeyChoice.Value
-    if Options.SoraMenuKey then Options.SoraMenuKey.Value=menuKey end
-end)
+local menuButton=Layout:AddButton({Text='Show / Hide Menu: End',Func=function() end})
+createKeyControl('SoraMenuKey','Menu','End',menuButton,visibility)
+local KeySettings=UITab:AddRightGroupbox('Keybinds')
+KeySettings:AddLabel('Click a binding, then press a key.')
+KeySettings:AddLabel('Escape cancels. Backspace clears.')
+for _,key in ipairs(keyControls) do
+    if key.Name~='Menu' then
+        local button=KeySettings:AddButton({Text=key.Name..': '..key.Value,Func=function() beginKeyCapture(key) end})
+        key.Button=button
+        key:Refresh()
+    end
+end
+local function resetKeybinds()
+    if pendingKey then pendingKey:Refresh(); pendingKey=nil end
+    for _,key in ipairs(keyControls) do key:SetValue('None') end
+    for _,key in ipairs(keyControls) do key:SetValue(key.Default) end
+end
+KeySettings:AddButton({Text='Reset Keybinds',Func=resetKeybinds})
 Layout:AddButton({Text='Center Window',Func=function() root.Position=UDim2.fromScale(0.5,0.5) end})
 Layout:AddButton({Text='Reset UI Settings',Func=function()
     Options.SoraAccentPreset:SetValue('Purple')
     Options.SoraUIScale:SetValue(100)
     Options.SoraUITransparency:SetValue(0)
     Toggles.SoraShowKeyHints:SetValue(true)
-    Options.SoraMenuKeyChoice:SetValue('End')
+    resetKeybinds()
     root.Position=UDim2.fromScale(0.5,0.5)
 end})
 
 local function cleanup()
     if not Session.Alive then return end
     Session.Alive = false
+    RunService:UnbindFromRenderStep(aimRenderName)
+    if aimGeometry then aimGeometry:Destroy(); aimGeometry=nil end
+    clearTakeBallAnimation()
+    takeBallAnimation:Destroy()
     State.AutoFarm=false
     if farmCleanup then farmCleanup() end
     for _, connection in ipairs(Session.Connections) do connection:Disconnect() end
@@ -877,5 +1126,5 @@ end
 Session.Cleanup = cleanup
 Library:OnUnload(cleanup)
 Menu:AddButton({ Text='Unload Sora Hub', Func=function() cleanup(); Library:Unload() end })
-Menu:AddLabel('Change menu key in UI Settings.')
-Library:Notify('Sora Hub loaded. F1: Bike | F2-F5: defense | End: menu', 6)
+Menu:AddLabel('Change keybinds in UI Settings.')
+Library:Notify('Sora Hub loaded. Change keybinds in UI Settings.', 6)
