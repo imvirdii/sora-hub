@@ -1,6 +1,3 @@
--- Sora Hub | Custom UI, no third-party UI library.
--- Client script; requires the same execution environment as the source project.
--- F1 Bike | F2 Trap | F3 Tackle | F4 TD Immunity | F5 Auto M2 | Space Aim | End Menu
 
 local Env = getgenv()
 if Env.SoraHubSession then
