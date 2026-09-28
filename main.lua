@@ -321,7 +321,7 @@ local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
 local pendingPlayer, pendingAt, bikeArmed = nil, 0, false
 local lastTrap, lastBikeTrap, lastRush, lastTackle, lastM2 = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
-local lastAutoTD,tdFacingUntil,tdAimPosition=-math.huge,0,nil
+local lastAutoTD,tdFacingUntil,tdTarget=-math.huge,0,nil
 local lastOwner, wasSprinting, dashDirection
 local rotationHumanoid, originalAutoRotate
 local camera, cameraConnection, originalFOV
@@ -413,7 +413,7 @@ local function bindCharacter(newCharacter)
     Character, Root, Humanoid = newCharacter, nil, nil
     speedBase, speedWritten, pendingPlayer, bikeArmed = nil, nil, nil, false
     wasSprinting, dashDirection = false, nil
-    tdFacingUntil,tdAimPosition=0,nil
+    tdFacingUntil,tdTarget=0,nil
     local newRoot = newCharacter:WaitForChild('HumanoidRootPart', 10)
     local newHumanoid = newCharacter:WaitForChild('Humanoid', 10)
     if not Session.Alive or Character ~= newCharacter then return end
@@ -447,7 +447,7 @@ local FarmTab = Window:AddTab('Autofarm')
 local Settings = Window:AddTab('Settings')
 local UITab = Window:AddTab('UI Settings')
 local Defense = Main:AddLeftGroupbox('Defense')
-local Aim = Main:AddRightGroupbox('Aim')
+local Attack = Main:AddRightGroupbox('Attack')
 local Movement = Main:AddRightGroupbox('Speed Demon')
 local PositionGroup = Main:AddLeftGroupbox('Auto Position')
 local FarmGroup = FarmTab:AddLeftGroupbox('Training Room')
@@ -469,19 +469,19 @@ end
 toggle(Defense, 'AutoTrap', 'Auto Trap', 'F2')
 toggle(Defense, 'AutoTackle', 'Auto Tackle', 'F3')
 toggle(Defense, 'AutoTD', 'Auto TD', 'F6', function(enabled)
-    if not enabled then tdFacingUntil,tdAimPosition=0,nil; releaseRotation() end
+    if not enabled then tdFacingUntil,tdTarget=0,nil; releaseRotation() end
 end)
 Defense:AddSlider('SoraTDRange',{Text='Auto TD Range',Default=8,Min=4,Max=25,Rounding=0})
 Options.SoraTDRange:OnChanged(function() State.TDRange=Options.SoraTDRange.Value end)
 Defense:AddSlider('SoraTDPrediction',{Text='Auto TD Prediction (seconds)',Default=0.12,Min=0,Max=0.25,Rounding=2})
 Options.SoraTDPrediction:OnChanged(function() State.TDPrediction=Options.SoraTDPrediction.Value end)
 
-toggle(Defense, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil end)
+toggle(Attack, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil end)
 toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
     if not enabled then clearTakeBallAnimation() end
 end)
-toggle(Defense, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
-toggle(Aim, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
+toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
+toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
     if not State.AutoAim then releaseRotation() end
 end)
@@ -631,7 +631,7 @@ else
         end
     end)
 end
-Defense:AddButton({Text='Rescan Auto Bike Slot', Func=function()
+Attack:AddButton({Text='Rescan Auto Bike Slot', Func=function()
     local skills=Player:FindFirstChild('EquippedSkills')
     if skills and scanBikeSlot(skills) then
         Library:Notify('Auto Bike slot: ' .. impactKey.Name,4)
@@ -674,29 +674,61 @@ local function gameBall(players)
         end
     end
 end
+local bikeResponses=setmetatable({}, {__mode='k'})
+local lastSnakeJump=-math.huge
+local function snakeJumpReady(now)
+    if not State.AutoTD or now-lastSnakeJump<0.5 or now-lastAutoTD<0.5 or now-lastTackle<0.5 then return false end
+    if not Character or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('Ball') then return false end
+    if Player:GetAttribute('UsingSkill') or Character:FindFirstChild('HoldingSkill') then return false end
+    if workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false end
+    local playerState=Player:FindFirstChild('PlayerStateFolder')
+    if playerState and playerState:FindFirstChild('Stun') then return false end
+    local cooldowns=RS:FindFirstChild('CooldownsFolder')
+    return not (cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..'Snake Jump'))
+end
 local function bicycleTrap(players, now)
-    -- Retain the last owner after the ball leaves their character, as in the pasted trap.
-    for _, player in ipairs(players) do
-        local folder = player.Character and player.Character:FindFirstChild('Ball')
-        if folder and folder:GetAttribute('GameBall') then lastOwner = player; break end
+    -- One shared animation scan for Auto Trap and Auto TD.
+    for _,player in ipairs(players) do
+        local folder=player.Character and player.Character:FindFirstChild('Ball')
+        if folder and folder:GetAttribute('GameBall') then lastOwner=player; break end
     end
-    if not lastOwner or lastOwner == Player or lastOwner.Parent ~= Players or now-lastBikeTrap < 0.2 then return end
-    local character = lastOwner.Character
-    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
-    local root = character and character:FindFirstChild('HumanoidRootPart')
-    if not humanoid or not root then return end
-    local animator = humanoid:FindFirstChildOfClass('Animator')
-    if not animator then return end
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        if track.Animation and track.Animation.AnimationId:match('%d+$') == '14085400141' then
-            local ball = gameBall(players)
-            if ball and (ball.Position-root.Position).Magnitude < 12.35 then
-                lastBikeTrap = now
-                Event:FireServer('UseSkill', 'Black Hole Trap')
+    if not lastOwner or lastOwner==Player or lastOwner.Parent~=Players then return false end
+    local character=lastOwner.Character
+    local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+    local root=character and character:FindFirstChild('HumanoidRootPart')
+    local animator=humanoid and humanoid:FindFirstChildOfClass('Animator')
+    if not root or not animator then return false end
+    for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+        if track.Animation and track.Animation.AnimationId:match('%d+$')=='14085400141' then
+            local response=bikeResponses[track]
+            local position=track.TimePosition
+            if not response or position+0.01<response.position then
+                response={fired=false}
+                bikeResponses[track]=response
             end
-            return
+            response.seen,response.position=now,position
+            if response.fired then return false end
+            local ball=gameBall(players)
+            if not ball or (ball.Position-root.Position).Magnitude>=12.35 then return false end
+            -- Auto Trap owns the bicycle response whenever it is enabled.
+            if State.AutoTrap then
+                if now-lastBikeTrap<0.2 then return false end
+                response.fired=true
+                lastBikeTrap=now
+                Event:FireServer('UseSkill','Black Hole Trap')
+                return true
+            elseif not sameTeam(lastOwner) and snakeJumpReady(now) then
+                response.fired=true
+                lastSnakeJump,lastAutoTD=now,now
+                tdTarget,tdFacingUntil=nil,0
+                releaseRotation()
+                Event:FireServer('UseSkill','Snake Jump')
+                return true
+            end
+            return false
         end
     end
+    return false
 end
 local function tdReady(now)
     if not State.AutoTD or now-lastAutoTD<0.5 or now-lastTackle<0.5 then return false end
@@ -714,28 +746,52 @@ local function rushTargetValid(target)
         and target.ball:IsDescendantOf(target.character)
         and target.root.Parent==target.character
         and target.humanoid.Health>0
-        and not sameTeam(target.player) and not iframes(target.character)
+        and not sameTeam(target.player)
         and (target.ball.Position-Root.Position).Magnitude<=State.TDRange
+end
+local function tdTargetPosition(target,remainingTime)
+    local offset=target.ball.Position-Root.Position
+    local flatDistance=Vector3.new(offset.X,0,offset.Z).Magnitude
+    -- Reduce lead at close range and as the short tracking window expires.
+    local prediction=State.TDPrediction*math.clamp(flatDistance/8,0,1)
+    if remainingTime then prediction=math.min(prediction,math.max(0,remainingTime)) end
+    local velocity=target.root.AssemblyLinearVelocity
+    local lead=Vector3.new(velocity.X,0,velocity.Z)*prediction
+    local maxLead=math.min(3,flatDistance*0.3)
+    if lead.Magnitude>maxLead then lead=lead.Unit*maxLead end
+    local predicted=target.ball.Position+lead
+    return Vector3.new(predicted.X,Root.Position.Y,predicted.Z)
 end
 local function startAutoTD(target,now)
     if not tdReady(now) or not rushTargetValid(target) then return false end
-    -- Use the holder's velocity: a carried ball's assembly velocity can be noisy.
-    local lead=target.root.AssemblyLinearVelocity*State.TDPrediction
-    lead=Vector3.new(lead.X,0,lead.Z)
-    if lead.Magnitude>3 then lead=lead.Unit*3 end
-    local predicted=target.ball.Position+lead
-    local flatTarget=Vector3.new(predicted.X,Root.Position.Y,predicted.Z)
+    local flatTarget=tdTargetPosition(target)
     if (flatTarget-Root.Position).Magnitude<0.001 then return false end
     lockRotation()
     Root.CFrame=CFrame.new(Root.Position,flatTarget)
-    tdAimPosition,tdFacingUntil=flatTarget,now+0.2
+    tdTarget,tdFacingUntil=target,now+0.2
     lastAutoTD=now
     Event:FireServer('UseSkill','Defensive Rush')
     return true
 end
+local function trackAutoTD(now)
+    if not tdTarget then return false end
+    if not State.AutoTD or now>=tdFacingUntil or not Root or not Root.Parent
+        or not Humanoid or Humanoid.Health<=0 or not Character
+        or Character:FindFirstChild('Ball') or not rushTargetValid(tdTarget) then
+        tdTarget=nil
+        releaseRotation()
+        return false
+    end
+    -- Recompute from the live holder and ball instead of holding a stale point.
+    local position=tdTargetPosition(tdTarget,tdFacingUntil-now)
+    if (position-Root.Position).Magnitude<0.001 then return true end
+    lockRotation()
+    Root.CFrame=CFrame.new(Root.Position,position)
+    return true
+end
 local function defenseStep(now)
     local players=Players:GetPlayers()
-    if State.AutoTrap then bicycleTrap(players,now) end
+    if (State.AutoTrap or State.AutoTD) and bicycleTrap(players,now) then return end
     if not Root or not Root.Parent or not Character then return end
     local canRush=tdReady(now)
     local myTeam=canRush and getTeam(Player) or nil
@@ -755,7 +811,7 @@ local function defenseStep(now)
                     if holderDistance<=8 then playTakeBallAnimation(now) end
                     Punch:FireServer('TakeBall',ball)
                 end
-                if canRush and not iframes(character) then
+                if canRush then
                     local theirTeam=getTeam(player)
                     local humanoid=character:FindFirstChildOfClass('Humanoid')
                     local distance=(ball.Position-Root.Position).Magnitude
@@ -1014,16 +1070,7 @@ end)
 local aimRenderName='SoraHubAim'
 RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
-    if State.AutoTD and tdAimPosition and os.clock()<tdFacingUntil and Root and Root.Parent
-        and Humanoid and Humanoid.Health>0 then
-        local target=Vector3.new(tdAimPosition.X,Root.Position.Y,tdAimPosition.Z)
-        if (target-Root.Position).Magnitude>0.001 then
-            lockRotation()
-            Root.CFrame=CFrame.new(Root.Position,target)
-        end
-        return
-    end
-    tdAimPosition=nil
+    if trackAutoTD(os.clock()) then return end
     aimStep()
     if not (State.AutoAim and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
