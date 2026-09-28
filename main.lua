@@ -315,6 +315,7 @@ local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false,
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
+    BallPrediction=false, OpponentCooldowns=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75,
 }
 local Character, Root, Humanoid
@@ -1077,6 +1078,248 @@ RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,funct
     end
 end)
 
+-- Local visual aids: no remotes are sent by these features.
+local visualFolder=Instance.new('Folder')
+visualFolder.Name='SoraHubVisuals'
+visualFolder.Parent=workspace
+local function visualPart(name)
+    local part=Instance.new('Part')
+    part.Name=name
+    part.Anchored=true
+    part.CanCollide=false
+    part.CanTouch=false
+    part.CanQuery=false
+    part.CastShadow=false
+    part.Material=Enum.Material.Neon
+    part.Transparency=1
+    part.Parent=visualFolder
+    return part
+end
+local landingRing,ringFrames={},{}
+local ringVisible=false
+local ringCenter
+-- Precompute the circle once; updates only move the existing segments.
+for i=1,20 do
+    local part=visualPart('LandingRing'..i)
+    part.Color=Color3.fromRGB(255,205,80)
+    local a=(i-1)*math.pi*2/20
+    local b=i*math.pi*2/20
+    local first=Vector3.new(math.cos(a)*2,0,math.sin(a)*2)
+    local second=Vector3.new(math.cos(b)*2,0,math.sin(b)*2)
+    part.Size=Vector3.new(0.12,0.12,(second-first).Magnitude)
+    ringFrames[i]=CFrame.new((first+second)*0.5,second)
+    landingRing[i]=part
+end
+local function hideLanding()
+    if not ringVisible then return end
+    ringVisible=false
+    ringCenter=nil
+    for _,part in ipairs(landingRing) do part.Transparency=1 end
+end
+local visualPlayers,visualBall={},nil
+local nextRosterRefresh,nextBallSearch,nextFilterRefresh=0,0,0
+local filterBall
+local landingParams=RaycastParams.new()
+landingParams.FilterType=Enum.RaycastFilterType.Exclude
+landingParams.RespectCanCollide=true
+local function visualRayParams(ball,now)
+    if now<nextFilterRefresh and filterBall==ball then return landingParams end
+    nextFilterRefresh=now+0.5
+    filterBall=ball
+    local excluded={visualFolder}
+    if aimGeometry then table.insert(excluded,aimGeometry) end
+    for _,name in ipairs({'Corners','FinalWalls'}) do
+        local object=workspace:FindFirstChild(name)
+        if object then table.insert(excluded,object) end
+    end
+    for _,player in ipairs(visualPlayers) do
+        if player.Character then table.insert(excluded,player.Character) end
+    end
+    if ball and ball.Parent then table.insert(excluded,ball.Parent:IsA('Model') and ball.Parent or ball) end
+    landingParams.FilterDescendantsInstances=excluded
+    return landingParams
+end
+local function landingPoint(ball,params)
+    local position=ball.Position
+    local velocity=ball.AssemblyLinearVelocity
+    local radius=math.min(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5
+    local ground=workspace:Raycast(position+Vector3.new(0,2,0),Vector3.new(0,-(radius+4),0),params)
+    if ground and ground.Normal.Y>=0.7 and position.Y-ground.Position.Y<=radius+0.6
+        and math.abs(velocity.Y)<6 then
+        -- A rolling ball has already landed: mark its short-term ground position.
+        local lead=Vector3.new(velocity.X,0,velocity.Z)*0.35
+        if lead.Magnitude>20 then lead=lead.Unit*20 end
+        local obstacle=lead.Magnitude>0.05 and workspace:Raycast(position,lead,params)
+        if obstacle then lead=obstacle.Position-position end
+        local projected=position+lead
+        local floor=workspace:Raycast(projected+Vector3.new(0,2,0),Vector3.new(0,-(radius+5),0),params)
+        return floor and floor.Normal.Y>=0.7 and floor.Position or ground.Position
+    end
+    local acceleration=Vector3.new(0,-workspace.Gravity,0)
+    local dt=0.1
+    local offset=Vector3.new(0,math.max(0,radius-0.05),0)
+    for _=1,40 do
+        local nextPosition=position+velocity*dt+acceleration*(0.5*dt*dt)
+        local hit=workspace:Raycast(position-offset,nextPosition-position,params)
+        if hit then
+            if hit.Normal.Y>=0.7 then return hit.Position end
+            return
+        end
+        position=nextPosition
+        velocity=velocity+acceleration*dt
+    end
+end
+local function updateBallVisuals()
+    if not State.BallPrediction then return end
+    if workspace:GetAttribute('GameEnded') then hideLanding(); return end
+    local now=os.clock()
+    if now>=nextRosterRefresh then
+        visualPlayers=Players:GetPlayers()
+        nextRosterRefresh=now+0.5
+    end
+    if not visualBall or not visualBall:IsDescendantOf(workspace) or now>=nextBallSearch then
+        visualBall=gameBall(visualPlayers)
+        nextBallSearch=now+0.25
+    end
+    local ball=visualBall
+    if not ball then hideLanding(); return end
+    for _,player in ipairs(visualPlayers) do
+        if player.Character and ball:IsDescendantOf(player.Character) then hideLanding(); return end
+    end
+    local landing=landingPoint(ball,visualRayParams(ball,now))
+    if not landing then hideLanding(); return end
+    local center=landing+Vector3.new(0,0.12,0)
+    if ringCenter and (center-ringCenter).Magnitude<0.03 then return end
+    local transform=CFrame.new(center)
+    for i,part in ipairs(landingRing) do
+        part.CFrame=transform*ringFrames[i]
+        if not ringVisible then part.Transparency=0.15 end
+    end
+    ringVisible,ringCenter=true,center
+end
+local cooldownSkills={
+    {slot='1',name='Explosive Rush',icon='13731727695'},
+    {slot='2',name='Diagonal Rush',icon='13811018937'},
+    {slot='3',name='Black Hole Trap',icon='12589275504'},
+    {slot='4',name='Creative Trap',icon='12589287854'},
+    {slot='5',name='Zero Reset Turn',icon='12589308502'},
+    {slot='6',name='Snake Jump',icon='14007268434'},
+    {slot='8',name='Defensive Rush',icon='14007268012'},
+}
+local headCooldowns={}
+local function clearHeadCooldowns()
+    for _,display in pairs(headCooldowns) do display.gui:Destroy() end
+    table.clear(headCooldowns)
+end
+local function createHeadCooldowns(player,head)
+    local billboard=ui('BillboardGui',Gui,{Name='Cooldowns_'..player.UserId,Adornee=head,
+        Size=UDim2.fromOffset(238,66),StudsOffsetWorldSpace=Vector3.new(0,3,0),
+        AlwaysOnTop=true,MaxDistance=State.CooldownRange,LightInfluence=0})
+    local display={gui=billboard,cells={}}
+    for i,skill in ipairs(cooldownSkills) do
+        local cell=ui('Frame',billboard,{Name=skill.name,Position=UDim2.fromOffset((i-1)*34,0),
+            Size=UDim2.fromOffset(32,40),BackgroundColor3=Color3.fromRGB(18,19,28),BackgroundTransparency=0.2,BorderSizePixel=0})
+        rounded(cell,4)
+        local icon=ui('ImageLabel',cell,{Image='rbxassetid://'..skill.icon,BackgroundTransparency=1,Size=UDim2.fromOffset(32,32)})
+        local slot=label(cell,skill.slot,10)
+        slot.Size=UDim2.fromOffset(12,12);slot.TextStrokeTransparency=0;slot.Font=Enum.Font.GothamBold
+        local timer=label(cell,'—',11)
+        timer.Position=UDim2.fromOffset(0,23);timer.Size=UDim2.fromOffset(32,17)
+        timer.TextXAlignment=Enum.TextXAlignment.Center;timer.TextStrokeTransparency=0
+        timer.Font=Enum.Font.GothamBold
+        display.cells[i]={icon=icon,timer=timer}
+    end
+    display.tackle=label(billboard,'',10)
+    display.tackle.Position=UDim2.fromOffset(0,43);display.tackle.Size=UDim2.new(1,0,0,22)
+    display.tackle.TextXAlignment=Enum.TextXAlignment.Center;display.tackle.TextStrokeTransparency=0
+    headCooldowns[player]=display
+    return display
+end
+local cooldownFolder,cooldownAdded,cooldownRemoved
+local observedCooldowns={}
+local function detachCooldowns()
+    clearHeadCooldowns()
+    if cooldownAdded then cooldownAdded:Disconnect(); cooldownAdded=nil end
+    if cooldownRemoved then cooldownRemoved:Disconnect(); cooldownRemoved=nil end
+    cooldownFolder=nil
+    table.clear(observedCooldowns)
+end
+local function syncCooldownFolder()
+    local folder=RS:FindFirstChild('CooldownsFolder')
+    if folder==cooldownFolder then return end
+    detachCooldowns()
+    cooldownFolder=folder
+    if not folder then return end
+    for _,entry in ipairs(folder:GetChildren()) do observedCooldowns[entry]={} end
+    cooldownAdded=folder.ChildAdded:Connect(function(entry)
+        observedCooldowns[entry]={seen=os.clock()}
+    end)
+    cooldownRemoved=folder.ChildRemoved:Connect(function(entry) observedCooldowns[entry]=nil end)
+end
+local function cooldownStatus(player,skill,now)
+    local entry=cooldownFolder:FindFirstChild(tostring(player.UserId)..skill)
+    if not entry then return 'not observed' end
+    local record=observedCooldowns[entry]
+    local duration=entry:GetAttribute('Cooldown')
+    if record and record.seen and type(duration)=='number' and duration>=0 then
+        local remaining=duration-(now-record.seen)
+        if remaining>0 then return string.format('~%.1fs',remaining) end
+    end
+    return 'ACTIVE'
+end
+local function updateCooldownPanel(now)
+    if not State.OpponentCooldowns then return end
+    syncCooldownFolder()
+    if not Root or not Root.Parent then clearHeadCooldowns(); return end
+    local visible={}
+    local myTeam=getTeam(Player)
+    for _,player in ipairs(Players:GetPlayers()) do
+        if player~=Player then
+            local character=player.Character
+            local root=character and character:FindFirstChild('HumanoidRootPart')
+            local head=character and character:FindFirstChild('Head')
+            local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+            local theirTeam=getTeam(player)
+            if root and head and humanoid and humanoid.Health>0 and (not myTeam or myTeam~=theirTeam)
+                and (root.Position-Root.Position).Magnitude<=State.CooldownRange then
+                visible[player]=true
+                local display=headCooldowns[player] or createHeadCooldowns(player,head)
+                display.gui.Adornee=head
+                display.gui.MaxDistance=State.CooldownRange+10
+                for i,skill in ipairs(cooldownSkills) do
+                    local status=cooldownFolder and cooldownStatus(player,skill.name,now) or 'unavailable'
+                    local active=status~='not observed' and status~='unavailable'
+                    local cell=display.cells[i]
+                    cell.icon.ImageTransparency=active and 0 or 0.55
+                    cell.timer.Text=status=='not observed' and '—' or status=='unavailable' and '?' or status=='ACTIVE' and 'CD' or status
+                    cell.timer.TextColor3=active and Color3.fromRGB(255,195,80) or Color3.fromRGB(200,200,210)
+                end
+                display.tackle.Text=cooldownFolder and ('Tackle: '..cooldownStatus(player,'Tackle',now)) or 'Cooldown data unavailable'
+            end
+        end
+    end
+    for player,display in pairs(headCooldowns) do
+        if not visible[player] then display.gui:Destroy();headCooldowns[player]=nil end
+    end
+end
+local Visuals=Main:AddRightGroupbox('Metavision')
+toggle(Visuals,'BallPrediction','Ball Landing / Rolling Marker',nil,function(enabled) if not enabled then hideLanding() end end)
+Visuals:AddLabel('Air: landing estimate. Ground: short rolling lead.')
+toggle(Visuals,'OpponentCooldowns','Opponent Cooldowns',nil,function(enabled)
+    if enabled then updateCooldownPanel(os.clock()) else detachCooldowns() end
+end)
+Visuals:AddLabel('Icons: timer/CD = active; — = not observed.')
+Visuals:AddSlider('SoraCooldownRange',{Text='Opponent Tracking Range',Default=80,Min=20,Max=200,Rounding=0})
+Options.SoraCooldownRange:OnChanged(function() State.CooldownRange=Options.SoraCooldownRange.Value end)
+local visualElapsed,cooldownElapsed=0,0
+connect(RunService.Heartbeat,function(dt)
+    if not Session.Alive then return end
+    visualElapsed=visualElapsed+dt
+    cooldownElapsed=cooldownElapsed+dt
+    if State.BallPrediction and visualElapsed>=0.05 then visualElapsed=0; updateBallVisuals() end
+    if State.OpponentCooldowns and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
+end)
+
 -- Custom appearance controls; recolor existing widgets and future toggle states.
 local Appearance = UITab:AddLeftGroupbox('Colors')
 local Layout = UITab:AddRightGroupbox('Window')
@@ -1154,6 +1397,8 @@ end})
 local function cleanup()
     if not Session.Alive then return end
     Session.Alive = false
+    detachCooldowns()
+    visualFolder:Destroy()
     RunService:UnbindFromRenderStep(aimRenderName)
     if aimGeometry then aimGeometry:Destroy(); aimGeometry=nil end
     clearTakeBallAnimation()
