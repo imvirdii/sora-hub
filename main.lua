@@ -1078,6 +1078,8 @@ RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,funct
     end
 end)
 
+local cleanupMetavision
+do
 -- Local visual aids: no remotes are sent by these features.
 local visualFolder=Instance.new('Folder')
 visualFolder.Name='SoraHubVisuals'
@@ -1197,15 +1199,71 @@ local function updateBallVisuals()
     end
     ringVisible,ringCenter=true,center
 end
-local cooldownSkills={
-    {slot='1',name='Explosive Rush',icon='13731727695'},
-    {slot='2',name='Diagonal Rush',icon='13811018937'},
-    {slot='3',name='Black Hole Trap',icon='12589275504'},
-    {slot='4',name='Creative Trap',icon='12589287854'},
-    {slot='5',name='Zero Reset Turn',icon='12589308502'},
-    {slot='6',name='Snake Jump',icon='14007268434'},
-    {slot='8',name='Defensive Rush',icon='14007268012'},
+-- All skill icons extracted from WeaponTrees; refresh from live definitions once.
+local cooldownIcons={
+    ["Impact Shot"]="rbxassetid://14065403478",
+    ["Impact Bicycle"]="rbxassetid://14065403865",
+    ["Direct Impact"]="rbxassetid://14089516792",
+    ["Defensive Stance"]="rbxassetid://14007267580",
+    ["Snake Jump"]="rbxassetid://14007268434",
+    ["Defensive Rush"]="rbxassetid://14007268012",
+    ["Explosive Rush"]="rbxassetid://13731727695",
+    ["Diagonal Rush"]="rbxassetid://13811018937",
+    ["Explosive Kick"]="rbxassetid://13731727432",
+    ["Superior Rush"]="rbxassetid://12589280756",
+    ["Dragon Drive"]="rbxassetid://13600834042",
+    ["Big Bang Drive"]="rbxassetid://13600830832",
+    ["Chop Feint"]="rbxassetid://13486932111",
+    ["Lightning Dribble"]="rbxassetid://13486931618",
+    ["Villainous Shot"]="rbxassetid://13486931863",
+    ["Jumping Header"]="rbxassetid://13486932589",
+    ["Midair Chest Trap"]="rbxassetid://13486932316",
+    ["Hyperspeed Scissors"]="rbxassetid://12589289473",
+    ["Marseille Turn"]="rbxassetid://12589482027",
+    ["Midair Elastico"]="rbxassetid://12971351497",
+    ["Rainbow Flick"]="rbxassetid://12971351341",
+    ["Explosive Acceleration"]="rbxassetid://12636110455",
+    ["Black Hole Trap"]="rbxassetid://12589275504",
+    ["Trap Shot"]="rbxassetid://12589305143",
+    ["Creative Trap"]="rbxassetid://12589287854",
+    ["Zero Reset Turn"]="rbxassetid://12589308502",
+    ["Fake Volley Shot"]="rbxassetid://13145237694",
+    ["Mark Smell"]="rbxassetid://13054982608",
+    ["Pinpoint High Speed Kick"]="rbxassetid://12846377200",
+    ["Trivela (Shot)"]="rbxassetid://12589277896",
+    ["Trivela (Pass)"]="rbxassetid://13033873580",
+    ["Goal Scent"]="rbxassetid://12589079530",
+    ["Long-Distance Sprinting"]="rbxassetid://12589079530",
+    ["Knuckle Shot"]="rbxassetid://12589286269",
+    ["Stealthy Steps"]="rbxassetid://12589292068",
+    ["Direct Shot"]="rbxassetid://12589280756",
 }
+local loadedIconModules=setmetatable({}, {__mode='k'})
+local function loadSkillIcons(module)
+    if not module:IsA('ModuleScript') or loadedIconModules[module] then return end
+    loadedIconModules[module]=true
+    task.spawn(function()
+        local ok,definitions=pcall(require,module)
+        if not Session.Alive or not ok or type(definitions)~='table' then return end
+        for _,skill in pairs(definitions) do
+            if type(skill)=='table' and type(skill.Name)=='string' and skill.icon then
+                local icon=tostring(skill.icon)
+                if icon:match('^%d+$') then icon='rbxassetid://'..icon end
+                cooldownIcons[skill.Name]=icon
+            end
+        end
+    end)
+end
+local iconTree
+local function refreshIconCatalog()
+    local tree=RS:FindFirstChild('WeaponTrees')
+    if tree==iconTree then return end
+    iconTree=tree
+    if tree then
+        for _,module in ipairs(tree:GetDescendants()) do loadSkillIcons(module) end
+        connect(tree.DescendantAdded,loadSkillIcons)
+    end
+end
 local headCooldowns={}
 local function clearHeadCooldowns()
     for _,display in pairs(headCooldowns) do display.gui:Destroy() end
@@ -1213,36 +1271,68 @@ local function clearHeadCooldowns()
 end
 local function createHeadCooldowns(player,head)
     local billboard=ui('BillboardGui',Gui,{Name='Cooldowns_'..player.UserId,Adornee=head,
-        Size=UDim2.fromOffset(238,66),StudsOffsetWorldSpace=Vector3.new(0,3,0),
-        AlwaysOnTop=true,MaxDistance=State.CooldownRange,LightInfluence=0})
+        Size=UDim2.fromOffset(44,54),StudsOffsetWorldSpace=Vector3.new(0,3,0),
+        AlwaysOnTop=true,MaxDistance=State.CooldownRange+10,LightInfluence=0})
     local display={gui=billboard,cells={}}
-    for i,skill in ipairs(cooldownSkills) do
-        local cell=ui('Frame',billboard,{Name=skill.name,Position=UDim2.fromOffset((i-1)*34,0),
-            Size=UDim2.fromOffset(32,40),BackgroundColor3=Color3.fromRGB(18,19,28),BackgroundTransparency=0.2,BorderSizePixel=0})
-        rounded(cell,4)
-        local icon=ui('ImageLabel',cell,{Image='rbxassetid://'..skill.icon,BackgroundTransparency=1,Size=UDim2.fromOffset(32,32)})
-        local slot=label(cell,skill.slot,10)
-        slot.Size=UDim2.fromOffset(12,12);slot.TextStrokeTransparency=0;slot.Font=Enum.Font.GothamBold
-        local timer=label(cell,'—',11)
-        timer.Position=UDim2.fromOffset(0,23);timer.Size=UDim2.fromOffset(32,17)
-        timer.TextXAlignment=Enum.TextXAlignment.Center;timer.TextStrokeTransparency=0
-        timer.Font=Enum.Font.GothamBold
-        display.cells[i]={icon=icon,timer=timer}
-    end
-    display.tackle=label(billboard,'',10)
-    display.tackle.Position=UDim2.fromOffset(0,43);display.tackle.Size=UDim2.new(1,0,0,22)
-    display.tackle.TextXAlignment=Enum.TextXAlignment.Center;display.tackle.TextStrokeTransparency=0
     headCooldowns[player]=display
     return display
 end
+local function createCooldownCell(display,name)
+    local cell=ui('Frame',display.gui,{Name=name,Size=UDim2.fromOffset(42,52),
+        BackgroundColor3=Color3.fromRGB(18,19,28),BackgroundTransparency=0.15,BorderSizePixel=0})
+    rounded(cell,5)
+    local icon=ui('ImageLabel',cell,{BackgroundTransparency=1,Size=UDim2.fromOffset(42,42)})
+    local fallback=label(cell,name:sub(1,3):upper(),13)
+    fallback.Size=UDim2.fromOffset(42,35);fallback.TextXAlignment=Enum.TextXAlignment.Center
+    local timer=label(cell,'CD',13)
+    timer.Position=UDim2.fromOffset(0,34);timer.Size=UDim2.fromOffset(42,18)
+    timer.TextXAlignment=Enum.TextXAlignment.Center;timer.TextStrokeTransparency=0
+    timer.Font=Enum.Font.GothamBold;timer.TextColor3=Color3.fromRGB(255,195,80)
+    local result={frame=cell,icon=icon,fallback=fallback,timer=timer}
+    display.cells[name]=result
+    return result
+end
 local cooldownFolder,cooldownAdded,cooldownRemoved
-local observedCooldowns={}
+local observedCooldowns,activeByUser={},{}
+local function removeCooldown(entry)
+    local record=observedCooldowns[entry]
+    if not record then return end
+    local bucket=activeByUser[record.userId]
+    if bucket then
+        bucket[entry]=nil
+        if next(bucket)==nil then activeByUser[record.userId]=nil end
+    end
+    observedCooldowns[entry]=nil
+    -- Remove the icon immediately, unless another active entry uses the same skill.
+    local stillActive=false
+    for _,other in pairs(bucket or {}) do
+        if other.skill==record.skill then stillActive=true;break end
+    end
+    if not stillActive then
+        for player,display in pairs(headCooldowns) do
+            if tostring(player.UserId)==record.userId then
+                local cell=display.cells[record.skill]
+                if cell then cell.frame:Destroy();display.cells[record.skill]=nil end
+                if next(display.cells)==nil then display.gui:Destroy();headCooldowns[player]=nil end
+            end
+        end
+    end
+end
+local function observeCooldown(entry,seen)
+    local userId,skill=entry.Name:match('^(%d+)(.+)$')
+    if not userId or not skill then return end
+    local record={userId=userId,skill=skill,seen=seen}
+    observedCooldowns[entry]=record
+    activeByUser[userId]=activeByUser[userId] or {}
+    activeByUser[userId][entry]=record
+end
 local function detachCooldowns()
     clearHeadCooldowns()
-    if cooldownAdded then cooldownAdded:Disconnect(); cooldownAdded=nil end
-    if cooldownRemoved then cooldownRemoved:Disconnect(); cooldownRemoved=nil end
+    if cooldownAdded then cooldownAdded:Disconnect();cooldownAdded=nil end
+    if cooldownRemoved then cooldownRemoved:Disconnect();cooldownRemoved=nil end
     cooldownFolder=nil
     table.clear(observedCooldowns)
+    table.clear(activeByUser)
 end
 local function syncCooldownFolder()
     local folder=RS:FindFirstChild('CooldownsFolder')
@@ -1250,51 +1340,62 @@ local function syncCooldownFolder()
     detachCooldowns()
     cooldownFolder=folder
     if not folder then return end
-    for _,entry in ipairs(folder:GetChildren()) do observedCooldowns[entry]={} end
-    cooldownAdded=folder.ChildAdded:Connect(function(entry)
-        observedCooldowns[entry]={seen=os.clock()}
-    end)
-    cooldownRemoved=folder.ChildRemoved:Connect(function(entry) observedCooldowns[entry]=nil end)
+    for _,entry in ipairs(folder:GetChildren()) do observeCooldown(entry,nil) end
+    cooldownAdded=folder.ChildAdded:Connect(function(entry) observeCooldown(entry,os.clock()) end)
+    cooldownRemoved=folder.ChildRemoved:Connect(removeCooldown)
 end
-local function cooldownStatus(player,skill,now)
-    local entry=cooldownFolder:FindFirstChild(tostring(player.UserId)..skill)
-    if not entry then return 'not observed' end
-    local record=observedCooldowns[entry]
+local function cooldownEntryText(entry,record,now)
     local duration=entry:GetAttribute('Cooldown')
-    if record and record.seen and type(duration)=='number' and duration>=0 then
+    if record.seen and type(duration)=='number' and duration>=0 then
         local remaining=duration-(now-record.seen)
-        if remaining>0 then return string.format('~%.1fs',remaining) end
+        if remaining>0 then return string.format('~%.1f',remaining) end
     end
-    return 'ACTIVE'
+    return 'CD'
 end
 local function updateCooldownPanel(now)
     if not State.OpponentCooldowns then return end
+    refreshIconCatalog()
     syncCooldownFolder()
-    if not Root or not Root.Parent then clearHeadCooldowns(); return end
+    if not Root or not Root.Parent then clearHeadCooldowns();return end
     local visible={}
     local myTeam=getTeam(Player)
     for _,player in ipairs(Players:GetPlayers()) do
-        if player~=Player then
+        local bucket=activeByUser[tostring(player.UserId)]
+        if player~=Player and bucket then
             local character=player.Character
             local root=character and character:FindFirstChild('HumanoidRootPart')
             local head=character and character:FindFirstChild('Head')
             local humanoid=character and character:FindFirstChildOfClass('Humanoid')
-            local theirTeam=getTeam(player)
-            if root and head and humanoid and humanoid.Health>0 and (not myTeam or myTeam~=theirTeam)
+            if root and head and humanoid and humanoid.Health>0 and (not myTeam or myTeam~=getTeam(player))
                 and (root.Position-Root.Position).Magnitude<=State.CooldownRange then
-                visible[player]=true
-                local display=headCooldowns[player] or createHeadCooldowns(player,head)
-                display.gui.Adornee=head
-                display.gui.MaxDistance=State.CooldownRange+10
-                for i,skill in ipairs(cooldownSkills) do
-                    local status=cooldownFolder and cooldownStatus(player,skill.name,now) or 'unavailable'
-                    local active=status~='not observed' and status~='unavailable'
-                    local cell=display.cells[i]
-                    cell.icon.ImageTransparency=active and 0 or 0.55
-                    cell.timer.Text=status=='not observed' and '—' or status=='unavailable' and '?' or status=='ACTIVE' and 'CD' or status
-                    cell.timer.TextColor3=active and Color3.fromRGB(255,195,80) or Color3.fromRGB(200,200,210)
+                local active,names={},{}
+                for entry,record in pairs(bucket) do
+                    if entry.Parent==cooldownFolder then
+                        if not active[record.skill] then table.insert(names,record.skill) end
+                        active[record.skill]={entry=entry,record=record}
+                    end
                 end
-                display.tackle.Text=cooldownFolder and ('Tackle: '..cooldownStatus(player,'Tackle',now)) or 'Cooldown data unavailable'
+                table.sort(names)
+                if #names>0 then
+                    visible[player]=true
+                    local display=headCooldowns[player] or createHeadCooldowns(player,head)
+                    display.gui.Adornee=head
+                    display.gui.MaxDistance=State.CooldownRange+10
+                    local columns=math.min(5,#names)
+                    display.gui.Size=UDim2.fromOffset(columns*46,math.ceil(#names/5)*56)
+                    for name,cell in pairs(display.cells) do
+                        if not active[name] then cell.frame:Destroy();display.cells[name]=nil end
+                    end
+                    for i,name in ipairs(names) do
+                        local cell=display.cells[name] or createCooldownCell(display,name)
+                        cell.frame.Position=UDim2.fromOffset(((i-1)%5)*46,math.floor((i-1)/5)*56)
+                        local icon=cooldownIcons[name]
+                        cell.icon.Image=icon or ''
+                        cell.icon.Visible=icon~=nil
+                        cell.fallback.Visible=icon==nil
+                        cell.timer.Text=cooldownEntryText(active[name].entry,active[name].record,now)
+                    end
+                end
             end
         end
     end
@@ -1308,7 +1409,7 @@ Visuals:AddLabel('Air: landing estimate. Ground: short rolling lead.')
 toggle(Visuals,'OpponentCooldowns','Opponent Cooldowns',nil,function(enabled)
     if enabled then updateCooldownPanel(os.clock()) else detachCooldowns() end
 end)
-Visuals:AddLabel('Icons: timer/CD = active; — = not observed.')
+Visuals:AddLabel('Only active cooldowns appear. CD = time unknown.')
 Visuals:AddSlider('SoraCooldownRange',{Text='Opponent Tracking Range',Default=80,Min=20,Max=200,Rounding=0})
 Options.SoraCooldownRange:OnChanged(function() State.CooldownRange=Options.SoraCooldownRange.Value end)
 local visualElapsed,cooldownElapsed=0,0
@@ -1319,6 +1420,12 @@ connect(RunService.Heartbeat,function(dt)
     if State.BallPrediction and visualElapsed>=0.05 then visualElapsed=0; updateBallVisuals() end
     if State.OpponentCooldowns and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
 end)
+
+cleanupMetavision=function()
+    detachCooldowns()
+    visualFolder:Destroy()
+end
+end
 
 -- Custom appearance controls; recolor existing widgets and future toggle states.
 local Appearance = UITab:AddLeftGroupbox('Colors')
@@ -1397,8 +1504,7 @@ end})
 local function cleanup()
     if not Session.Alive then return end
     Session.Alive = false
-    detachCooldowns()
-    visualFolder:Destroy()
+    if cleanupMetavision then cleanupMetavision() end
     RunService:UnbindFromRenderStep(aimRenderName)
     if aimGeometry then aimGeometry:Destroy(); aimGeometry=nil end
     clearTakeBallAnimation()
