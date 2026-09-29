@@ -46,6 +46,19 @@ end
 local function label(parent, text, size)
     return ui('TextLabel', parent, { BackgroundTransparency=1, Text=text, TextColor3=Color3.fromRGB(238,238,248), Font=Enum.Font.Gotham, TextSize=size or 13, TextXAlignment=Enum.TextXAlignment.Left, Size=UDim2.new(1,0,0,22) })
 end
+local hoverTip=ui('TextLabel',Gui,{Visible=false,ZIndex=30,Size=UDim2.fromOffset(230,52),
+    BackgroundColor3=Color3.fromRGB(27,28,40),BackgroundTransparency=0.05,BorderSizePixel=0,
+    Text='',TextColor3=Color3.new(1,1,1),Font=Enum.Font.Gotham,TextSize=11,
+    TextWrapped=true,TextXAlignment=Enum.TextXAlignment.Center,TextYAlignment=Enum.TextYAlignment.Center})
+rounded(hoverTip,7)
+ui('UIStroke',hoverTip,{Color=Color3.fromRGB(90,82,122),Thickness=1})
+local function placeHoverTip()
+    local pointer=UIInput:GetMouseLocation()
+    local camera=workspace.CurrentCamera
+    local viewport=camera and camera.ViewportSize or Vector2.new(900,650)
+    hoverTip.Position=UDim2.fromOffset(math.max(0,math.min(pointer.X+14,viewport.X-236)),
+        math.max(0,math.min(pointer.Y+14,viewport.Y-58)))
+end
 local root = ui('Frame', Gui, { Size=UDim2.fromOffset(570,530), AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), BackgroundColor3=Color3.fromRGB(18,19,28), BorderSizePixel=0 })
 rounded(root,12)
 ui('UIStroke',root,{Color=Color3.fromRGB(62,55,88),Thickness=1})
@@ -65,7 +78,7 @@ local hide = ui('TextButton',root,{Text='−',Font=Enum.Font.GothamBold,TextSize
 rounded(hide)
 local reopen=ui('TextButton',Gui,{Text='SORA',Font=Enum.Font.GothamBold,TextSize=14,TextColor3=Color3.new(1,1,1),BackgroundColor3=accent,Size=UDim2.fromOffset(70,34),Position=UDim2.fromOffset(12,100),Visible=false,BorderSizePixel=0})
 rounded(reopen)
-local function visibility() root.Visible=not root.Visible; reopen.Visible=not root.Visible end
+local function visibility() root.Visible=not root.Visible; reopen.Visible=not root.Visible;hoverTip.Visible=false end
 listen(hide.Activated,visibility)
 listen(reopen.Activated,visibility)
 local dragging, dragStart, frameStart
@@ -139,6 +152,11 @@ local function groupMethods(parent)
     function group:AddToggle(id, info)
         local holder=row(parent)
         local button=ui('TextButton',holder,{Text='',AutoButtonColor=false,BackgroundTransparency=1,Size=UDim2.fromScale(1,1)})
+        if info.Tooltip then
+            listen(button.MouseEnter,function() hoverTip.Text=info.Tooltip;placeHoverTip();hoverTip.Visible=true end)
+            listen(button.MouseMoved,function() if hoverTip.Visible then placeHoverTip() end end)
+            listen(button.MouseLeave,function() hoverTip.Visible=false end)
+        end
         local caption=label(button,info.Text,13); caption.Size=UDim2.new(1,-75,1,0)
         local pill=ui('TextLabel',button,{Size=UDim2.fromOffset(44,23),Position=UDim2.new(1,-44,0.5,-11),Font=Enum.Font.GothamBold,TextSize=10,BorderSizePixel=0,TextColor3=Color3.new(1,1,1)})
         rounded(pill,7)
@@ -322,7 +340,7 @@ local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=8,
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
-    BallPrediction=false, OpponentCooldowns=false, OpponentReady=false, CooldownRange=80,
+    BallPrediction=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75, CanonKaiser=true,
 }
 local Character, Root, Humanoid
@@ -519,9 +537,9 @@ local FarmGroup = FarmTab:AddLeftGroupbox('Training Room')
 local General = Settings:AddLeftGroupbox('General')
 local CameraGroup = Settings:AddRightGroupbox('Camera')
 local Menu = Settings:AddLeftGroupbox('Menu')
-local function toggle(group, name, label, key, onChanged)
+local function toggle(group, name, label, key, onChanged, description)
     local id = 'Sora' .. name
-    local control = group:AddToggle(id, { Text=label, Default=State[name] })
+    local control = group:AddToggle(id, { Text=label, Default=State[name], Tooltip=description })
     if key then
         control:AddKeyPicker(id .. 'Key', { Default=key, SyncToggleState=true, Mode='Toggle', Text=label, NoUI=false })
     end
@@ -1348,6 +1366,17 @@ end
 local visualPlayers,visualBall={},nil
 local nextRosterRefresh,nextBallSearch,nextFilterRefresh=0,0,0
 local filterBall
+local function currentVisualBall(now)
+    if now>=nextRosterRefresh then
+        visualPlayers=Players:GetPlayers()
+        nextRosterRefresh=now+0.5
+    end
+    if not visualBall or not visualBall:IsDescendantOf(workspace) or now>=nextBallSearch then
+        visualBall=gameBall(visualPlayers)
+        nextBallSearch=now+0.25
+    end
+    return visualBall
+end
 local landingParams=RaycastParams.new()
 landingParams.FilterType=Enum.RaycastFilterType.Exclude
 landingParams.RespectCanCollide=true
@@ -1402,15 +1431,7 @@ local function updateBallVisuals()
     if not State.BallPrediction then return end
     if workspace:GetAttribute('GameEnded') then hideLanding(); return end
     local now=os.clock()
-    if now>=nextRosterRefresh then
-        visualPlayers=Players:GetPlayers()
-        nextRosterRefresh=now+0.5
-    end
-    if not visualBall or not visualBall:IsDescendantOf(workspace) or now>=nextBallSearch then
-        visualBall=gameBall(visualPlayers)
-        nextBallSearch=now+0.25
-    end
-    local ball=visualBall
+    local ball=currentVisualBall(now)
     if not ball then hideLanding(); return end
     for _,player in ipairs(visualPlayers) do
         if player.Character and ball:IsDescendantOf(player.Character) then hideLanding(); return end
@@ -1425,6 +1446,265 @@ local function updateBallVisuals()
         if not ringVisible then part.Transparency=0.15 end
     end
     ringVisible,ringCenter=true,center
+end
+-- Two small world markers, allocated once and moved at 10 Hz only when enabled.
+local function newCue(name,color,radius)
+    local cue={segments={},offsets={},visible=false,radius=radius}
+    for i=1,12 do
+        local a,b=(i-1)*math.pi/6,i*math.pi/6
+        cue.offsets[i]={Vector3.new(math.cos(a),0,math.sin(a)),Vector3.new(math.cos(b),0,math.sin(b))}
+        local part=visualPart(name..i)
+        part.Color=color
+        part.Size=Vector3.new(0.12,0.10,1)
+        cue.segments[i]=part
+    end
+    return cue
+end
+local reboundCue=newCue('ReboundCue',Color3.fromRGB(255,151,72),1.8)
+local receptionCue=newCue('ReceptionCue',Color3.fromRGB(75,220,255),1.5)
+local reboundAnchor=visualPart('ReboundLabelAnchor')
+reboundAnchor.Size=Vector3.new(0.1,0.1,0.1)
+local reboundGui=ui('BillboardGui',reboundAnchor,{Size=UDim2.fromOffset(84,22),
+    StudsOffsetWorldSpace=Vector3.new(0,1.8,0),AlwaysOnTop=true,MaxDistance=125,Enabled=false})
+local reboundText=ui('TextLabel',reboundGui,{Text='REBOUND',Font=Enum.Font.GothamBold,TextSize=11,
+    TextColor3=Color3.fromRGB(255,216,165),BackgroundColor3=Color3.fromRGB(23,24,34),
+    BackgroundTransparency=0.22,BorderSizePixel=0,Size=UDim2.fromScale(1,1)})
+rounded(reboundText,5)
+local function hideCue(cue)
+    if not cue.visible then return end
+    cue.visible=false
+    for _,part in ipairs(cue.segments) do part.Transparency=1 end
+    if cue==reboundCue then reboundGui.Enabled=false end
+end
+local function moveCue(cue,point)
+    local center=point+Vector3.new(0,0.14,0)
+    if cue.visible and cue.center and (center-cue.center).Magnitude<0.12 then return end
+    cue.center=center
+    for i,part in ipairs(cue.segments) do
+        local ends=cue.offsets[i]
+        local first=center+ends[1]*cue.radius
+        local second=center+ends[2]*cue.radius
+        part.Size=Vector3.new(0.12,0.10,(second-first).Magnitude)
+        part.CFrame=CFrame.lookAt((first+second)*0.5,second)
+        part.Transparency=0.18
+    end
+    cue.visible=true
+    if cue==reboundCue then
+        reboundAnchor.CFrame=CFrame.new(center)
+        reboundGui.Enabled=true
+    end
+end
+local reboundBall,previousBounceVelocity,lastReboundAt,reboundUntil=nil,nil,-math.huge,0
+local function observeBounce(ball,now)
+    if ball~=reboundBall then
+        reboundBall,previousBounceVelocity=ball,nil
+        reboundUntil=0
+    end
+    if not State.ReboundAlert or not ball then
+        previousBounceVelocity=nil
+        hideCue(reboundCue)
+        return
+    end
+    local velocity=ball.AssemblyLinearVelocity
+    local previous=previousBounceVelocity
+    previousBounceVelocity=velocity
+    if previous and now-lastReboundAt>0.65 then
+        local horizontal=Vector3.new(velocity.X,0,velocity.Z)
+        local priorHorizontal=Vector3.new(previous.X,0,previous.Z)
+        local deflected=horizontal.Magnitude>18 and priorHorizontal.Magnitude>18
+            and horizontal:Dot(priorHorizontal)<0.55*horizontal.Magnitude*priorHorizontal.Magnitude
+        local bouncedUp=previous.Y< -14 and velocity.Y>12 and previous.Magnitude>23
+        if deflected or bouncedUp then
+            lastReboundAt,reboundUntil=now,now+1.5
+        end
+    end
+end
+local function freeVisualBall(now)
+    local ball=currentVisualBall(now)
+    if not ball then return nil end
+    for _,player in ipairs(visualPlayers) do
+        if player.Character and ball:IsDescendantOf(player.Character) then return nil end
+    end
+    return ball
+end
+local function updateFieldCues(now)
+    if not State.ReboundAlert and not State.PassReception then return end
+    if workspace:GetAttribute('GameEnded') then hideCue(reboundCue);hideCue(receptionCue);return end
+    local ball=freeVisualBall(now)
+    if not ball then hideCue(reboundCue);hideCue(receptionCue);return end
+    local params=visualRayParams(ball,now)
+    if State.ReboundAlert and now<reboundUntil and ball==reboundBall then
+        local projected=ball.Position+ball.AssemblyLinearVelocity*0.22
+        local ground=workspace:Raycast(projected+Vector3.new(0,12,0),Vector3.new(0,-75,0),params)
+        if ground and ground.Normal.Y>=0.65 then moveCue(reboundCue,ground.Position)
+        else hideCue(reboundCue) end
+    else hideCue(reboundCue) end
+    if not State.PassReception or not Root or not Root.Parent or not Humanoid or Humanoid.Health<=0 then
+        hideCue(receptionCue)
+        return
+    end
+    local velocity=ball.AssemblyLinearVelocity
+    local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
+    local toPlayer=Root.Position-ball.Position
+    local distance=Vector3.new(toPlayer.X,0,toPlayer.Z).Magnitude
+    local speedSquared=flatVelocity:Dot(flatVelocity)
+    if speedSquared<18*18 or distance<7 or distance>110 then hideCue(receptionCue);return end
+    local interceptTime=Vector3.new(toPlayer.X,0,toPlayer.Z):Dot(flatVelocity)/speedSquared
+    if interceptTime<0.12 or interceptTime>1.35 then hideCue(receptionCue);return end
+    local projected=ball.Position+flatVelocity*interceptTime
+    local ground=workspace:Raycast(Vector3.new(projected.X,Root.Position.Y+12,projected.Z),Vector3.new(0,-42,0),params)
+    if not ground or ground.Normal.Y<0.65 then hideCue(receptionCue);return end
+    local nearGround=workspace:Raycast(ball.Position+Vector3.new(0,1,0),Vector3.new(0,-4,0),params)
+    if not nearGround or ball.Position.Y-nearGround.Position.Y>3.5 then
+        local height=ball.Position.Y+velocity.Y*interceptTime-0.5*workspace.Gravity*interceptTime*interceptTime
+        if height>ground.Position.Y+6 then hideCue(receptionCue);return end
+    end
+    local reachable=math.max(8,Humanoid.WalkSpeed)*interceptTime+5
+    if (Root.Position-ground.Position).Magnitude>reachable then hideCue(receptionCue);return end
+    moveCue(receptionCue,ground.Position)
+end
+-- Keep at most six seconds of ball motion. Sampling is independent of the
+-- landing toggle, so the replay button works even when that visual is off.
+local history,historyNext,historyCount={},1,0
+local historyBall,lastBallPosition,lastMotionAt,completedPlay=nil,nil,0,nil
+local replayParts,replayStarted={},nil
+local function snapshotHistory()
+    local points={}
+    for i=1,historyCount do
+        points[i]=history[(historyNext-historyCount+i-2)%60+1]
+    end
+    return points
+end
+local function archiveMotion(now)
+    if historyCount>=3 and now-lastMotionAt<2 then
+        completedPlay={points=snapshotHistory(),at=now}
+    end
+    table.clear(history)
+    historyNext,historyCount=1,0
+end
+local function recordBallPath(now)
+    local ball=freeVisualBall(now)
+    observeBounce(ball,now)
+    if ball~=historyBall then
+        archiveMotion(now)
+        historyBall,lastBallPosition=ball,nil
+    end
+    if not ball then return end
+    local position=ball.Position
+    if lastBallPosition then
+        local distance=(position-lastBallPosition).Magnitude
+        if distance>180 then archiveMotion(now)
+        elseif distance<0.35 then
+            if historyCount>0 and now-lastMotionAt>=0.5 then archiveMotion(lastMotionAt) end
+            lastBallPosition=position
+            return
+        end
+    end
+    lastBallPosition,lastMotionAt=position,now
+    history[historyNext]=position
+    historyNext=historyNext%60+1
+    historyCount=math.min(historyCount+1,60)
+end
+local function clearReplay()
+    for _,part in ipairs(replayParts) do part:Destroy() end
+    table.clear(replayParts)
+    replayStarted=nil
+end
+local function showLastPlay()
+    clearReplay()
+    local now=os.clock()
+    local points
+    if historyCount>=3 and (not completedPlay or lastMotionAt>=completedPlay.at) then
+        points=snapshotHistory()
+    elseif completedPlay then
+        points=completedPlay.points
+    end
+    if not points or #points<3 then
+        Library:Notify('No recent ball path to replay yet.',3)
+        return
+    end
+    -- At most 30 simple parts, created only when requested.
+    local stride=math.max(1,math.ceil((#points-1)/30))
+    for i=1,#points-1,stride do
+        local first,second=points[i],points[math.min(i+stride,#points)]
+        local length=(second-first).Magnitude
+        if length>0.1 and length<180 then
+            local part=visualPart('LastPlayTrail')
+            part.Color=Color3.fromRGB(255,207,85)
+            part.Size=Vector3.new(0.17,0.17,length)
+            part.CFrame=CFrame.lookAt((first+second)*0.5,second)
+            part.Transparency=0.15
+            table.insert(replayParts,part)
+        end
+    end
+    replayStarted=now
+end
+local function updateReplay(now)
+    if not replayStarted then return end
+    local elapsed=now-replayStarted
+    if elapsed>=10 then clearReplay();return end
+    local transparency=0.15+elapsed*0.085
+    for _,part in ipairs(replayParts) do part.Transparency=transparency end
+end
+-- An independent, compact HUD marker for balls outside the camera viewport.
+local offscreenGui=Instance.new('ScreenGui')
+offscreenGui.Name='SoraOffscreenBall'
+offscreenGui.ResetOnSpawn=false
+offscreenGui.IgnoreGuiInset=true
+offscreenGui.DisplayOrder=Gui.DisplayOrder+1
+offscreenGui.Parent=Player:WaitForChild('PlayerGui')
+local ballMarker=ui('Frame',offscreenGui,{
+    Size=UDim2.fromOffset(62,65),AnchorPoint=Vector2.new(0.5,0.5),
+    BackgroundColor3=Color3.fromRGB(18,19,28),BackgroundTransparency=0.22,
+    BorderSizePixel=0,Visible=false,
+})
+rounded(ballMarker,9)
+ui('UIStroke',ballMarker,{Color=Color3.fromRGB(245,245,245),Transparency=0.55,Thickness=1})
+local arrowGlyph=ui('TextLabel',ballMarker,{
+    BackgroundTransparency=1,Text='▲',Font=Enum.Font.GothamBold,TextSize=17,
+    TextColor3=Color3.fromRGB(255,219,91),AnchorPoint=Vector2.new(0.5,0.5),
+    Size=UDim2.fromOffset(22,19),Position=UDim2.new(0.5,0,0,11),
+})
+ui('TextLabel',ballMarker,{
+    BackgroundTransparency=1,Text='⚽',Font=Enum.Font.GothamBold,TextSize=25,
+    TextColor3=Color3.new(1,1,1),Size=UDim2.fromOffset(30,28),
+    Position=UDim2.new(0.5,-15,0,21),
+})
+local ballDistance=ui('TextLabel',ballMarker,{
+    BackgroundTransparency=1,Text='',Font=Enum.Font.GothamBold,TextSize=11,
+    TextColor3=Color3.new(1,1,1),TextXAlignment=Enum.TextXAlignment.Center,
+    Size=UDim2.new(1,0,0,14),Position=UDim2.fromOffset(0,48),
+})
+local function updateOffscreenBall()
+    if not State.OffscreenBall or workspace:GetAttribute('GameEnded') then
+        ballMarker.Visible=false
+        return
+    end
+    local ball=currentVisualBall(os.clock())
+    local currentCamera=workspace.CurrentCamera
+    if not ball or not currentCamera then ballMarker.Visible=false;return end
+    local view=currentCamera.ViewportSize
+    if view.X<130 or view.Y<130 then ballMarker.Visible=false;return end
+    local projected,onScreen=currentCamera:WorldToViewportPoint(ball.Position)
+    if onScreen and projected.Z>0 then ballMarker.Visible=false;return end
+    local center=Vector2.new(view.X*0.5,view.Y*0.5)
+    local direction
+    if projected.Z>0 then
+        direction=Vector2.new(projected.X-center.X,projected.Y-center.Y)
+    else
+        local relative=currentCamera.CFrame:PointToObjectSpace(ball.Position)
+        direction=Vector2.new(relative.X,-relative.Y)
+    end
+    if direction.Magnitude<0.001 then direction=Vector2.new(0,1) end
+    direction=direction.Unit
+    local maxX,maxY=center.X-42,center.Y-45
+    local edge=math.min(maxX/math.max(math.abs(direction.X),0.001),maxY/math.max(math.abs(direction.Y),0.001))
+    local location=center+direction*edge
+    ballMarker.Position=UDim2.fromOffset(location.X,location.Y)
+    arrowGlyph.Rotation=math.deg(math.atan2(direction.Y,direction.X))+90
+    local origin=Root and Root.Parent and Root.Position or currentCamera.CFrame.Position
+    ballDistance.Text=tostring(math.floor((ball.Position-origin).Magnitude+0.5))..' studs'
+    ballMarker.Visible=true
 end
 -- All skill icons extracted from WeaponTrees; refresh from live definitions once.
 local cooldownIcons={
@@ -1654,29 +1934,113 @@ updateCooldownPanel=function(now)
         if not visible[player] then display.gui:Destroy();headCooldowns[player]=nil end
     end
 end
+local tdHighlights={}
+local function clearTDHighlights()
+    for player,highlight in pairs(tdHighlights) do
+        highlight:Destroy()
+        tdHighlights[player]=nil
+    end
+end
+local function updateTDHighlights()
+    if not State.HighlightTDs then return end
+    local cooldowns=RS:FindFirstChild('CooldownsFolder')
+    local visible={}
+    if cooldowns then
+        for _,player in ipairs(Players:GetPlayers()) do
+            if player~=Player then
+                local character=player.Character
+                local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+                local skills=player:FindFirstChild('EquippedSkills')
+                if character and humanoid and humanoid.Health>0 and skills then
+                    local hasRush=false
+                    for slot,skill in pairs(skills:GetAttributes()) do
+                        if slot:match('^Slot') and skill=='Defensive Rush' then
+                            hasRush=true
+                            break
+                        end
+                    end
+                    if hasRush and not cooldowns:FindFirstChild(tostring(player.UserId)..'Defensive Rush') then
+                        visible[player]=true
+                        local highlight=tdHighlights[player]
+                        if not highlight then
+                            highlight=Instance.new('Highlight')
+                            highlight.Name='SoraReadyDefensiveRush'
+                            highlight.FillColor=Color3.fromRGB(60,220,110)
+                            highlight.FillTransparency=0.8
+                            highlight.OutlineColor=Color3.fromRGB(65,255,125)
+                            highlight.OutlineTransparency=0
+                            highlight.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+                            highlight.Parent=visualFolder
+                            tdHighlights[player]=highlight
+                        end
+                        if highlight.Adornee~=character then highlight.Adornee=character end
+                    end
+                end
+            end
+        end
+    end
+    for player,highlight in pairs(tdHighlights) do
+        if not visible[player] then
+            highlight:Destroy()
+            tdHighlights[player]=nil
+        end
+    end
+end
 local Visuals=Main:AddRightGroupbox('Metavision')
-toggle(Visuals,'BallPrediction','Ball Landing / Rolling Marker',nil,function(enabled) if not enabled then hideLanding() end end)
+toggle(Visuals,'BallPrediction','Ball Landing / Rolling Marker',nil,function(enabled) if not enabled then hideLanding() end end,
+    'Shows an estimated landing point in the air, or a short forward marker while the ball rolls.')
+toggle(Visuals,'ReboundAlert','Rebound Alert',nil,function(enabled)
+    if not enabled then reboundUntil=0;hideCue(reboundCue) end
+end,'Shows a small orange marker after the free ball sharply changes direction. The REBOUND label marks its short-term ground position.')
+toggle(Visuals,'PassReception','Pass Reception Cue',nil,function(enabled)
+    if not enabled then hideCue(receptionCue) end
+end,'Shows a cyan field marker where you could reach an incoming free ball. It disappears if the ball changes course or becomes unreachable.')
+Visuals:AddButton({Text='Replay Last Ball Path',Func=showLastPlay})
+Visuals:AddLabel('Recent ball trail fades over 10 seconds.')
+toggle(Visuals,'OffscreenBall','Off-Screen Ball Arrow',nil,function(enabled)
+    if enabled then updateOffscreenBall() else ballMarker.Visible=false end
+end,'Shows a small ball arrow and distance near the screen edge while the ball is outside your view.')
 Visuals:AddLabel('Air: landing estimate. Ground: short rolling lead.')
 toggle(Visuals,'OpponentCooldowns','Opponent Cooldowns',nil,function(enabled)
     if enabled or State.OpponentReady then updateCooldownPanel(os.clock()) else detachCooldowns() end
-end)
+end,'Shows an opponent move above their head only while its visible cooldown is active.')
 toggle(Visuals,'OpponentReady','Opponent Ready Moves',nil,function(enabled)
     if enabled or State.OpponentCooldowns then updateCooldownPanel(os.clock()) else detachCooldowns() end
-end)
+end,'Shows equipped moves above nearby opponents when no cooldown entry is visible.')
+toggle(Visuals,'HighlightTDs','Highlight TDs',nil,function(enabled)
+    if enabled then updateTDHighlights() else clearTDHighlights() end
+end,'Highlights players with Defensive Rush equipped in green when it appears ready.')
+Visuals:AddLabel('Green: Defensive Rush equipped and off cooldown.')
 Visuals:AddLabel('Ready moves hide while their cooldown is active.')
 Visuals:AddLabel('READY means no cooldown entry is visible.')
 Visuals:AddSlider('SoraCooldownRange',{Text='Opponent Tracking Range',Default=80,Min=20,Max=200,Rounding=0})
 Options.SoraCooldownRange:OnChanged(function() State.CooldownRange=Options.SoraCooldownRange.Value end)
-local visualElapsed,cooldownElapsed=0,0
+local visualElapsed,cooldownElapsed,tdHighlightElapsed,arrowElapsed,recordElapsed,replayElapsed=0,0,0,0,0,0
 connect(RunService.Heartbeat,function(dt)
     if not Session.Alive then return end
     visualElapsed=visualElapsed+dt
     cooldownElapsed=cooldownElapsed+dt
+    tdHighlightElapsed=tdHighlightElapsed+dt
+    arrowElapsed=arrowElapsed+dt
+    recordElapsed=recordElapsed+dt
+    replayElapsed=replayElapsed+dt
+    if recordElapsed>=0.1 then
+        recordElapsed=0
+        local now=os.clock()
+        recordBallPath(now)
+        if State.ReboundAlert or State.PassReception then updateFieldCues(now) end
+    end
     if State.BallPrediction and visualElapsed>=0.05 then visualElapsed=0; updateBallVisuals() end
+    if replayStarted and replayElapsed>=0.2 then replayElapsed=0;updateReplay(os.clock()) end
+    if State.OffscreenBall and arrowElapsed>=0.05 then arrowElapsed=0; updateOffscreenBall() end
     if (State.OpponentCooldowns or State.OpponentReady) and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
+    if State.HighlightTDs and tdHighlightElapsed>=0.2 then tdHighlightElapsed=0; updateTDHighlights() end
 end)
 
 cleanupMetavision=function()
+    clearReplay()
+    offscreenGui:Destroy()
+    clearTDHighlights()
     detachCooldowns()
     visualFolder:Destroy()
 end
