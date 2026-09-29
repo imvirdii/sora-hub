@@ -3,6 +3,13 @@
 -- F1 Bike | F2 Trap | F3 Tackle | F4 TD Immunity | F5 Auto M2 | Space Aim | End Menu
 
 local Env = getgenv()
+-- Players excluded from targeted automation. Add exact Roblox usernames here.
+local Exceptions = {
+    ["TheNextNagi"] = true,
+}
+local function isExcepted(player)
+    return player ~= nil and Exceptions[player.Name] == true
+end
 if Env.SoraHubSession then
     warn('Sora Hub is already running. Unload it before executing again.')
     return
@@ -312,11 +319,11 @@ local Tackle = Remotes:WaitForChild('UseKeyboardSkillRemote')
 local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
-    AutoTrap = false, AutoTackle = false, TDImmunity = false,
+    AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=8,
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
-    BallPrediction=false, OpponentCooldowns=false, CooldownRange=80,
-    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75,
+    BallPrediction=false, OpponentCooldowns=false, OpponentReady=false, CooldownRange=80,
+    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75, CanonKaiser=true,
 }
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
@@ -442,6 +449,63 @@ end
 connect(workspace:GetPropertyChangedSignal('CurrentCamera'), bindCamera)
 bindCamera()
 
+local updateCanonKaiser,cleanupCanonKaiser
+do
+    local animation=Instance.new('Animation')
+    animation.AnimationId='rbxassetid://13732545430'
+    local listener,replay,animator
+    local generation=0
+    local phase='idle'
+    local function reset()
+        generation=generation+1
+        phase='idle'
+        if listener then listener:Disconnect();listener=nil end
+        if replay then replay:Stop(0.1);replay:Destroy();replay=nil end
+        animator=nil
+    end
+    local function bind(character)
+        reset()
+        if not State.CanonKaiser or not Session.Alive or not character then return end
+        local token=generation
+        task.spawn(function()
+            local humanoid=character:WaitForChild('Humanoid',10)
+            local current=humanoid and humanoid:WaitForChild('Animator',10)
+            if not current or not Session.Alive or not State.CanonKaiser or token~=generation or Player.Character~=character then return end
+            animator=current
+            local function onPlayed(track)
+                if token~=generation or not State.CanonKaiser or not Session.Alive or track==replay then return end
+                if not track.Animation or track.Animation.AnimationId:match('%d+$')~='13732545430' then return end
+                if phase=='cooldown' then return end
+                track:Stop(0.1)
+                if phase=='suppressing' then return end
+                phase='suppressing'
+                -- Original timing: suppress for 0.25 seconds, replay, pause 1.5 seconds.
+                task.delay(0.25,function()
+                    if token~=generation or not Session.Alive or not State.CanonKaiser or Player.Character~=character or humanoid.Health<=0 then return end
+                    if not replay then
+                        local ok,result=pcall(function() return current:LoadAnimation(animation) end)
+                        if not ok then phase='idle';return end
+                        replay=result
+                    end
+                    phase='cooldown'
+                    replay:Play()
+                    task.delay(1.5,function()
+                        if token==generation then phase='idle' end
+                    end)
+                end)
+            end
+            listener=current.AnimationPlayed:Connect(onPlayed)
+            -- Catch a matching animation already running when enabled.
+            for _,track in ipairs(current:GetPlayingAnimationTracks()) do onPlayed(track) end
+        end)
+    end
+    updateCanonKaiser=function() bind(Player.Character) end
+    connect(Player.CharacterAdded,bind)
+    connect(Player.CharacterRemoving,reset)
+    cleanupCanonKaiser=function() reset();animation:Destroy() end
+    updateCanonKaiser()
+end
+
 local Window = Library:CreateWindow({ Title='Sora Hub', Center=true, AutoShow=true, TabPadding=8, MenuFadeTime=0.2 })
 local Main = Window:AddTab('Main')
 local FarmTab = Window:AddTab('Autofarm')
@@ -481,7 +545,11 @@ toggle(Attack, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil
 toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
     if not enabled then clearTakeBallAnimation() end
 end)
+toggle(Attack,'AutoDribble','Auto Dribble','F7')
+Attack:AddSlider('SoraDribbleRange',{Text='Auto Dribble Range',Default=8,Min=4,Max=15,Rounding=0})
+Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDribbleRange.Value end)
 toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
+toggle(Attack,'CanonKaiser','Canon Kaiser',nil,updateCanonKaiser)
 toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
     if not State.AutoAim then releaseRotation() end
@@ -574,7 +642,7 @@ local function selectedTrap()
 end
 local trapActions = { ['Creative Trap']='UseSkill', ['Black Hole Trap']='UseSkill', ['Zero Reset Turn']='Hold', ['Dragon Drive']='Hold' }
 connect(Event.OnClientEvent, function(action, player, style, skill)
-    if not Session.Alive or not player or player == Player then return end
+    if not Session.Alive or not player or player == Player or isExcepted(player) then return end
     local now = os.clock()
     if State.AutoTrap and action == 'Hold' and (skill == 'Impact Shot' or skill == 'Explosive Kick') and now-lastTrap >= 0.2 then
         local selected = selectedTrap()
@@ -582,6 +650,11 @@ connect(Event.OnClientEvent, function(action, player, style, skill)
             lastTrap = now
             Event:FireServer(trapActions[selected], selected)
         end
+    end
+    -- Snake Jump's UseSkill broadcast starts its exported effect animation.
+    if State.AutoTrap and action=='UseSkill' and skill=='Snake Jump' and now-lastBikeTrap>=0.2 then
+        lastBikeTrap=now
+        Event:FireServer('UseSkill','Black Hole Trap')
     end
     if not State.TDImmunity or style ~= 'Total Defense' then return end
     if pendingPlayer and now-pendingAt > 5 then pendingPlayer = nil end
@@ -693,7 +766,7 @@ local function bicycleTrap(players, now)
         local folder=player.Character and player.Character:FindFirstChild('Ball')
         if folder and folder:GetAttribute('GameBall') then lastOwner=player; break end
     end
-    if not lastOwner or lastOwner==Player or lastOwner.Parent~=Players then return false end
+    if not lastOwner or lastOwner==Player or lastOwner.Parent~=Players or isExcepted(lastOwner) then return false end
     local character=lastOwner.Character
     local humanoid=character and character:FindFirstChildOfClass('Humanoid')
     local root=character and character:FindFirstChild('HumanoidRootPart')
@@ -744,6 +817,7 @@ local function tdReady(now)
 end
 local function rushTargetValid(target)
     return target.player.Character==target.character
+        and not isExcepted(target.player)
         and target.ball:IsDescendantOf(target.character)
         and target.root.Parent==target.character
         and target.humanoid.Health>0
@@ -799,7 +873,7 @@ local function defenseStep(now)
     local rushTarget,rushDistance=nil,math.huge
     local tackleTarget,tackleDistance=nil,math.huge
     for _,player in ipairs(players) do
-        if player~=Player then
+        if player~=Player and not isExcepted(player) then
             local character=player.Character
             local root=character and character:FindFirstChild('HumanoidRootPart')
             local folder=character and character:FindFirstChild('Ball')
@@ -838,7 +912,7 @@ local function defenseStep(now)
     if rushTarget and startAutoTD(rushTarget,now) then return end
     if tackleTarget then
         local target=tackleTarget
-        if sameTeam(target.player) or iframes(target.character) or not target.ball:IsDescendantOf(target.character) then return end
+        if isExcepted(target.player) or sameTeam(target.player) or iframes(target.character) or not target.ball:IsDescendantOf(target.character) then return end
         lastTackle=now
         Tackle:FireServer('TackleBegin')
         Tackle:FireServer('Tackle',target.ball,Root.CFrame*CFrame.new(0,-1.5,0))
@@ -1045,6 +1119,8 @@ local function farmStep(now)
         if now-lastFarmTackle>=0.1 then
             local ball=gameBall(Players:GetPlayers())
             if ball and ball.Parent then
+                local holder=ball.Parent.Parent and Players:GetPlayerFromCharacter(ball.Parent.Parent)
+                if isExcepted(holder) then return end
                 lastFarmTackle=now
                 Tackle:FireServer('TackleBegin')
                 Tackle:FireServer('Tackle',ball,ball.CFrame)
@@ -1077,6 +1153,88 @@ RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,funct
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
     end
 end)
+
+-- Reactive dribble: TakeBall animation and newly replicated Tackle cooldowns.
+local cleanupDribble
+do
+    local lastDribble=-math.huge
+    local tracks=setmetatable({}, {__mode='k'})
+    local folder,added
+    local function stopWatching()
+        if added then added:Disconnect();added=nil end
+        folder=nil
+        table.clear(tracks)
+    end
+    cleanupDribble=stopWatching
+    local function react(player,now)
+        if not Session.Alive or not State.AutoDribble or now-lastDribble<0.35 then return false end
+        if not player or player==Player or isExcepted(player) or sameTeam(player) then return false end
+        if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent
+            or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('CantDribble') or iframes(Character) then return false end
+        if workspace:GetAttribute('PlayersAllowedToUseSkills')==false or Player:GetAttribute('UsingSkill') then return false end
+        local ps=Player:FindFirstChild('PlayerStateFolder')
+        if ps and ps:FindFirstChild('Stun') then return false end
+        local other=player.Character
+        local otherRoot=other and other:FindFirstChild('HumanoidRootPart')
+        if not otherRoot or (otherRoot.Position-Root.Position).Magnitude>State.DribbleRange then return false end
+        local amount=Player:GetAttribute('Dribbles')
+        if type(amount)~='number' or amount<1 then return false end
+        local away=Root.Position-otherRoot.Position
+        local choices={Forward=Root.CFrame.LookVector,Back=-Root.CFrame.LookVector,Right=Root.CFrame.RightVector,Left=-Root.CFrame.RightVector}
+        local direction,score=nil,-math.huge
+        local costs={Forward=1,Back=1,Right=1,Left=1}
+        for _,child in ipairs(Character:GetChildren()) do
+            if child.Name=='DribblesIncrease' and child:IsA('StringValue') and costs[child.Value] then costs[child.Value]=costs[child.Value]+1 end
+        end
+        for name,vector in pairs(choices) do
+            local value=away:Dot(vector)
+            if amount>=costs[name] and value>score then direction,score=name,value end
+        end
+        if not direction then return false end
+        lastDribble=now
+        Tackle:FireServer('Dribble',direction)
+        return true
+    end
+    local elapsed=0
+    connect(RunService.Heartbeat,function(dt)
+        if not Session.Alive then return end
+        if not State.AutoDribble then if added then stopWatching() end;return end
+        elapsed=elapsed+dt
+        if elapsed<0.03 then return end
+        elapsed=0
+        local current=RS:FindFirstChild('CooldownsFolder')
+        if current~=folder then
+            stopWatching();folder=current
+            if folder then
+                added=folder.ChildAdded:Connect(function(entry)
+                    local id=entry.Name:match('^(%d+)Tackle$')
+                    if id then react(Players:GetPlayerByUserId(tonumber(id)),os.clock()) end
+                end)
+            end
+        end
+        if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent then return end
+        for _,player in ipairs(Players:GetPlayers()) do
+            if player~=Player and not isExcepted(player) and not sameTeam(player) then
+                local character=player.Character
+                local root=character and character:FindFirstChild('HumanoidRootPart')
+                if root and (root.Position-Root.Position).Magnitude<=State.DribbleRange then
+                    local humanoid=character:FindFirstChildOfClass('Humanoid')
+                    local animator=humanoid and humanoid:FindFirstChildOfClass('Animator')
+                    if animator then
+                        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+                            if track.Animation and track.Animation.AnimationId:match('%d+$')=='12698914098' then
+                                local record=tracks[track]
+                                if not record or track.TimePosition+0.01<record.position then record={fired=false};tracks[track]=record end
+                                record.position=track.TimePosition
+                                if not record.fired and track.TimePosition<=0.45 and react(player,os.clock()) then record.fired=true end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
 
 local cleanupMetavision
 do
@@ -1294,6 +1452,7 @@ local function createCooldownCell(display,name)
 end
 local cooldownFolder,cooldownAdded,cooldownRemoved
 local observedCooldowns,activeByUser={},{}
+local finishedByUser={}
 local function removeCooldown(entry)
     local record=observedCooldowns[entry]
     if not record then return end
@@ -1309,6 +1468,8 @@ local function removeCooldown(entry)
         if other.skill==record.skill then stillActive=true;break end
     end
     if not stillActive then
+        finishedByUser[record.userId]=finishedByUser[record.userId] or {}
+        finishedByUser[record.userId][record.skill]=true
         for player,display in pairs(headCooldowns) do
             if tostring(player.UserId)==record.userId then
                 local cell=display.cells[record.skill]
@@ -1321,6 +1482,7 @@ end
 local function observeCooldown(entry,seen)
     local userId,skill=entry.Name:match('^(%d+)(.+)$')
     if not userId or not skill then return end
+    if finishedByUser[userId] then finishedByUser[userId][skill]=nil end
     local record={userId=userId,skill=skill,seen=seen}
     observedCooldowns[entry]=record
     activeByUser[userId]=activeByUser[userId] or {}
@@ -1333,6 +1495,7 @@ local function detachCooldowns()
     cooldownFolder=nil
     table.clear(observedCooldowns)
     table.clear(activeByUser)
+    table.clear(finishedByUser)
 end
 local function syncCooldownFolder()
     local folder=RS:FindFirstChild('CooldownsFolder')
@@ -1353,7 +1516,7 @@ local function cooldownEntryText(entry,record,now)
     return 'CD'
 end
 local function updateCooldownPanel(now)
-    if not State.OpponentCooldowns then return end
+    if not State.OpponentCooldowns and not State.OpponentReady then return end
     refreshIconCatalog()
     syncCooldownFolder()
     if not Root or not Root.Parent then clearHeadCooldowns();return end
@@ -1361,7 +1524,7 @@ local function updateCooldownPanel(now)
     local myTeam=getTeam(Player)
     for _,player in ipairs(Players:GetPlayers()) do
         local bucket=activeByUser[tostring(player.UserId)]
-        if player~=Player and bucket then
+        if player~=Player and not isExcepted(player) and (bucket or State.OpponentReady) then
             local character=player.Character
             local root=character and character:FindFirstChild('HumanoidRootPart')
             local head=character and character:FindFirstChild('Head')
@@ -1369,10 +1532,28 @@ local function updateCooldownPanel(now)
             if root and head and humanoid and humanoid.Health>0 and (not myTeam or myTeam~=getTeam(player))
                 and (root.Position-Root.Position).Magnitude<=State.CooldownRange then
                 local active,names={},{}
-                for entry,record in pairs(bucket) do
-                    if entry.Parent==cooldownFolder then
+                for entry,record in pairs(bucket or {}) do
+                    if State.OpponentCooldowns and entry.Parent==cooldownFolder then
                         if not active[record.skill] then table.insert(names,record.skill) end
                         active[record.skill]={entry=entry,record=record}
+                    end
+                end
+                if State.OpponentReady and cooldownFolder then
+                    local known={}
+                    local equipped=player:FindFirstChild('EquippedSkills')
+                    if equipped then
+                        for _,skill in pairs(equipped:GetAttributes()) do
+                            if type(skill)=='string' and cooldownIcons[skill] then known[skill]=true end
+                        end
+                    else
+                        for skill in pairs(finishedByUser[tostring(player.UserId)] or {}) do known[skill]=true end
+                    end
+                    for skill in pairs(known) do
+                        if not cooldownFolder:FindFirstChild(tostring(player.UserId)..skill) and not active[skill] then
+                            local finished=finishedByUser[tostring(player.UserId)]
+                            active[skill]={ready=true,confirmed=finished and finished[skill]}
+                            table.insert(names,skill)
+                        end
                     end
                 end
                 table.sort(names)
@@ -1393,7 +1574,9 @@ local function updateCooldownPanel(now)
                         cell.icon.Image=icon or ''
                         cell.icon.Visible=icon~=nil
                         cell.fallback.Visible=icon==nil
-                        cell.timer.Text=cooldownEntryText(active[name].entry,active[name].record,now)
+                        local item=active[name]
+                        cell.timer.Text=item.ready and (item.confirmed and 'READY' or 'NO CD') or cooldownEntryText(item.entry,item.record,now)
+                        cell.timer.TextColor3=item.ready and Color3.fromRGB(105,235,150) or Color3.fromRGB(255,195,80)
                     end
                 end
             end
@@ -1407,9 +1590,13 @@ local Visuals=Main:AddRightGroupbox('Metavision')
 toggle(Visuals,'BallPrediction','Ball Landing / Rolling Marker',nil,function(enabled) if not enabled then hideLanding() end end)
 Visuals:AddLabel('Air: landing estimate. Ground: short rolling lead.')
 toggle(Visuals,'OpponentCooldowns','Opponent Cooldowns',nil,function(enabled)
-    if enabled then updateCooldownPanel(os.clock()) else detachCooldowns() end
+    if enabled or State.OpponentReady then updateCooldownPanel(os.clock()) else detachCooldowns() end
 end)
-Visuals:AddLabel('Only active cooldowns appear. CD = time unknown.')
+toggle(Visuals,'OpponentReady','Opponent Ready Moves',nil,function(enabled)
+    if enabled or State.OpponentCooldowns then updateCooldownPanel(os.clock()) else detachCooldowns() end
+end)
+Visuals:AddLabel('READY: expiry observed. NO CD: none visible.')
+Visuals:AddLabel('Cooldown status does not guarantee usable.')
 Visuals:AddSlider('SoraCooldownRange',{Text='Opponent Tracking Range',Default=80,Min=20,Max=200,Rounding=0})
 Options.SoraCooldownRange:OnChanged(function() State.CooldownRange=Options.SoraCooldownRange.Value end)
 local visualElapsed,cooldownElapsed=0,0
@@ -1418,7 +1605,7 @@ connect(RunService.Heartbeat,function(dt)
     visualElapsed=visualElapsed+dt
     cooldownElapsed=cooldownElapsed+dt
     if State.BallPrediction and visualElapsed>=0.05 then visualElapsed=0; updateBallVisuals() end
-    if State.OpponentCooldowns and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
+    if (State.OpponentCooldowns or State.OpponentReady) and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
 end)
 
 cleanupMetavision=function()
@@ -1504,6 +1691,8 @@ end})
 local function cleanup()
     if not Session.Alive then return end
     Session.Alive = false
+    if cleanupCanonKaiser then cleanupCanonKaiser() end
+    if cleanupDribble then cleanupDribble() end
     if cleanupMetavision then cleanupMetavision() end
     RunService:UnbindFromRenderStep(aimRenderName)
     if aimGeometry then aimGeometry:Destroy(); aimGeometry=nil end
