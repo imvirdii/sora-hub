@@ -320,7 +320,7 @@ local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=8,
-    AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, AimAllowed = true, AutoBike = true,
+    AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, OpponentCooldowns=false, OpponentReady=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75, CanonKaiser=true,
@@ -554,8 +554,15 @@ toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
     if not State.AutoAim then releaseRotation() end
 end)
+toggle(Attack,'ShootAfterAimed','Shoot After Aimed',nil,function(enabled)
+    if enabled and not State.AimAllowed then Toggles.SoraShootAfterAimed:SetValue(false) end
+end)
 toggle(General, 'AimAllowed', 'Allow Auto Aim', nil, function(enabled)
-    if not enabled then Toggles.SoraAutoAim:SetValue(false); releaseRotation() end
+    if not enabled then
+        Toggles.SoraShootAfterAimed:SetValue(false)
+        Toggles.SoraAutoAim:SetValue(false)
+        releaseRotation()
+    end
 end)
 toggle(Movement, 'SpeedDemon', 'Speed Demon', nil, refreshSpeed)
 Movement:AddSlider('SoraSpeedBoost', { Text='Speed Boost', Default=0.75, Min=0, Max=5, Rounding=2, Compact=false })
@@ -1007,6 +1014,67 @@ local function aimStep()
     Root.CFrame=CFrame.new(Root.Position,Root.Position+direction)
     return true
 end
+-- Original PowerfulShot priority and remote sequences, after a successful aim.
+local shootAfterAimStep
+do
+    local possession,startedAt,nextCheck,sent=nil,nil,0,false
+    local function readyShot()
+        local equipped=Player:FindFirstChild('EquippedSkills')
+        local gui=Player:FindFirstChild('PlayerGui')
+        local hotbar=gui and gui:FindFirstChild('SkilsGui',true)
+        local cooldowns=RS:FindFirstChild('CooldownsFolder')
+        local available,blocked={},{}
+        if equipped then
+            for slot,skill in pairs(equipped:GetAttributes()) do
+                if slot:match('^Slot') and (skill=='Impact Shot' or skill=='Explosive Kick') then
+                    available[skill]=true
+                end
+            end
+        end
+        if hotbar then
+            for _,slot in ipairs(hotbar:GetChildren()) do
+                local name=slot:FindFirstChild('SkillName')
+                if name and (name:IsA('TextLabel') or name:IsA('TextButton')) then
+                    local skill=name.Text
+                    if skill=='Impact Shot' or skill=='Explosive Kick' then
+                        available[skill]=true
+                        local cd=slot:FindFirstChild('CDFrame')
+                        if cd and cd:IsA('GuiObject') and cd.Visible then blocked[skill]=true end
+                    end
+                end
+            end
+        end
+        for _,skill in ipairs({'Impact Shot','Explosive Kick'}) do
+            if available[skill] and not blocked[skill]
+                and not (cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..skill)) then
+                return skill
+            end
+        end
+    end
+    shootAfterAimStep=function(aimed)
+        local ball=Character and Character:FindFirstChild('Ball')
+        if not Session.Alive or not State.ShootAfterAimed or not State.AutoAim or not State.AimAllowed or not ball then
+            possession,startedAt,nextCheck,sent=nil,nil,0,false
+            return
+        end
+        if ball~=possession then possession,startedAt,nextCheck,sent=ball,nil,0,false end
+        if not aimed or sent or game.PlaceId==12467817668 then return end
+        local now=os.clock()
+        if not startedAt then startedAt=now end
+        -- Bound the original readiness wait without yielding the render callback.
+        if now-startedAt>1.5 or now<nextCheck then return end
+        nextCheck=now+0.1
+        if not Humanoid or Humanoid.Health<=0 or Player:GetAttribute('UsingSkill')
+            or workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return end
+        local state=Player:FindFirstChild('PlayerStateFolder')
+        if state and (state:FindFirstChild('Stun') or state:FindFirstChild('CantPunch')) then return end
+        local skill=readyShot()
+        if not skill then return end
+        sent=true
+        Event:FireServer('Hold',skill)
+        if skill=='Explosive Kick' then Event:FireServer('UseSkill',skill) end
+    end
+end
 local function movementStep()
     if not State.SpeedDemon or not Root or not Root.Parent or not Humanoid then dashDirection=nil; return end
     local isSprinting = sprinting() and true or false
@@ -1147,8 +1215,9 @@ end)
 local aimRenderName='SoraHubAim'
 RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
-    if trackAutoTD(os.clock()) then return end
-    aimStep()
+    if trackAutoTD(os.clock()) then shootAfterAimStep(false);return end
+    local aimed=aimStep()
+    shootAfterAimStep(aimed)
     if not (State.AutoAim and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
     end
@@ -1453,6 +1522,7 @@ end
 local cooldownFolder,cooldownAdded,cooldownRemoved
 local observedCooldowns,activeByUser={},{}
 local finishedByUser={}
+local updateCooldownPanel
 local function removeCooldown(entry)
     local record=observedCooldowns[entry]
     if not record then return end
@@ -1462,7 +1532,7 @@ local function removeCooldown(entry)
         if next(bucket)==nil then activeByUser[record.userId]=nil end
     end
     observedCooldowns[entry]=nil
-    -- Remove the icon immediately, unless another active entry uses the same skill.
+    -- The move can appear as ready again once its final cooldown entry is gone.
     local stillActive=false
     for _,other in pairs(bucket or {}) do
         if other.skill==record.skill then stillActive=true;break end
@@ -1470,13 +1540,6 @@ local function removeCooldown(entry)
     if not stillActive then
         finishedByUser[record.userId]=finishedByUser[record.userId] or {}
         finishedByUser[record.userId][record.skill]=true
-        for player,display in pairs(headCooldowns) do
-            if tostring(player.UserId)==record.userId then
-                local cell=display.cells[record.skill]
-                if cell then cell.frame:Destroy();display.cells[record.skill]=nil end
-                if next(display.cells)==nil then display.gui:Destroy();headCooldowns[player]=nil end
-            end
-        end
     end
 end
 local function observeCooldown(entry,seen)
@@ -1504,8 +1567,14 @@ local function syncCooldownFolder()
     cooldownFolder=folder
     if not folder then return end
     for _,entry in ipairs(folder:GetChildren()) do observeCooldown(entry,nil) end
-    cooldownAdded=folder.ChildAdded:Connect(function(entry) observeCooldown(entry,os.clock()) end)
-    cooldownRemoved=folder.ChildRemoved:Connect(removeCooldown)
+    cooldownAdded=folder.ChildAdded:Connect(function(entry)
+        observeCooldown(entry,os.clock())
+        updateCooldownPanel(os.clock())
+    end)
+    cooldownRemoved=folder.ChildRemoved:Connect(function(entry)
+        removeCooldown(entry)
+        updateCooldownPanel(os.clock())
+    end)
 end
 local function cooldownEntryText(entry,record,now)
     local duration=entry:GetAttribute('Cooldown')
@@ -1515,7 +1584,7 @@ local function cooldownEntryText(entry,record,now)
     end
     return 'CD'
 end
-local function updateCooldownPanel(now)
+updateCooldownPanel=function(now)
     if not State.OpponentCooldowns and not State.OpponentReady then return end
     refreshIconCatalog()
     syncCooldownFolder()
@@ -1542,16 +1611,15 @@ local function updateCooldownPanel(now)
                     local known={}
                     local equipped=player:FindFirstChild('EquippedSkills')
                     if equipped then
-                        for _,skill in pairs(equipped:GetAttributes()) do
-                            if type(skill)=='string' and cooldownIcons[skill] then known[skill]=true end
+                        for slot,skill in pairs(equipped:GetAttributes()) do
+                            if slot:match('^Slot') and type(skill)=='string' and skill~='' then known[skill]=true end
                         end
                     else
                         for skill in pairs(finishedByUser[tostring(player.UserId)] or {}) do known[skill]=true end
                     end
                     for skill in pairs(known) do
                         if not cooldownFolder:FindFirstChild(tostring(player.UserId)..skill) and not active[skill] then
-                            local finished=finishedByUser[tostring(player.UserId)]
-                            active[skill]={ready=true,confirmed=finished and finished[skill]}
+                            active[skill]={ready=true}
                             table.insert(names,skill)
                         end
                     end
@@ -1575,7 +1643,7 @@ local function updateCooldownPanel(now)
                         cell.icon.Visible=icon~=nil
                         cell.fallback.Visible=icon==nil
                         local item=active[name]
-                        cell.timer.Text=item.ready and (item.confirmed and 'READY' or 'NO CD') or cooldownEntryText(item.entry,item.record,now)
+                        cell.timer.Text=item.ready and 'READY' or cooldownEntryText(item.entry,item.record,now)
                         cell.timer.TextColor3=item.ready and Color3.fromRGB(105,235,150) or Color3.fromRGB(255,195,80)
                     end
                 end
@@ -1595,8 +1663,8 @@ end)
 toggle(Visuals,'OpponentReady','Opponent Ready Moves',nil,function(enabled)
     if enabled or State.OpponentCooldowns then updateCooldownPanel(os.clock()) else detachCooldowns() end
 end)
-Visuals:AddLabel('READY: expiry observed. NO CD: none visible.')
-Visuals:AddLabel('Cooldown status does not guarantee usable.')
+Visuals:AddLabel('Ready moves hide while their cooldown is active.')
+Visuals:AddLabel('READY means no cooldown entry is visible.')
 Visuals:AddSlider('SoraCooldownRange',{Text='Opponent Tracking Range',Default=80,Min=20,Max=200,Rounding=0})
 Options.SoraCooldownRange:OnChanged(function() State.CooldownRange=Options.SoraCooldownRange.Value end)
 local visualElapsed,cooldownElapsed=0,0
