@@ -3,6 +3,14 @@
 -- F1 Bike | F2 Trap | F3 Tackle | F4 TD Immunity | F5 Auto M2 | Space Aim | End Menu
 
 local Env = getgenv()
+-- These are PlaceIds, not the shared universe GameId.
+local HubMode=({
+    [12694155368]='Basic', -- Main Game
+    [12868032990]='Basic', -- Training Room
+    [13864400206]='Daily Challenge',
+    [12467817668]='Auto Spin', -- Main Lobby
+})[game.PlaceId]
+if not HubMode then warn('Sora Hub: this place is not supported.');return end
 -- Players excluded from targeted automation. Add exact Roblox usernames here.
 local Exceptions = {
     ["TheNextNagi"] = true,
@@ -221,18 +229,37 @@ local function groupMethods(parent)
         rounded(button,6)
         local choices=ui('Frame',holder,{Visible=false,BackgroundTransparency=1,Size=UDim2.new(1,0,0,#info.Values*28),Position=UDim2.fromOffset(0,58)})
         ui('UIListLayout',choices,{Padding=UDim.new(0,2)})
-        local control={Value=info.Values[info.Default or 1]}
+        local control={Value=info.Multi and {} or info.Values[info.Default or 1]}
+        local items={}
         function control:SetValue(value)
-            if not table.find(info.Values,value) then return end
-            self.Value=value; button.Text=value .. '  ▾'
-            choices.Visible=false; holder.Size=UDim2.new(1,0,0,60)
+            if info.Multi then
+                if type(value)~='table' then return end
+                self.Value={}
+                local count=0
+                for _,choice in ipairs(info.Values) do
+                    if value[choice] then self.Value[choice]=true;count=count+1 end
+                    if items[choice] then items[choice].Text=(value[choice] and '✓ ' or '')..choice end
+                end
+                button.Text=count==0 and 'Choose targets  ▾' or tostring(count)..' selected  ▾'
+            else
+                if not table.find(info.Values,value) then return end
+                self.Value=value; button.Text=value .. '  ▾'
+                choices.Visible=false; holder.Size=UDim2.new(1,0,0,60)
+            end
             if self.Callback then self.Callback() end
         end
         function control:OnChanged(callback) self.Callback=callback end
         for _,value in ipairs(info.Values) do
             local item=ui('TextButton',choices,{Text=value,Font=Enum.Font.Gotham,TextSize=12,TextColor3=Color3.new(1,1,1),BackgroundColor3=Color3.fromRGB(48,42,65),Size=UDim2.new(1,0,0,26),BorderSizePixel=0})
+            items[value]=item
             rounded(item,5)
-            listen(item.Activated,function() control:SetValue(value) end)
+            listen(item.Activated,function()
+                if info.Multi then
+                    local selected=table.clone(control.Value)
+                    selected[value]=not selected[value] or nil
+                    control:SetValue(selected)
+                else control:SetValue(value) end
+            end)
         end
         listen(button.Activated,function()
             choices.Visible=not choices.Visible
@@ -250,6 +277,7 @@ local function groupMethods(parent)
     function group:AddLabel(text)
         local textLabel=label(parent,text,11); textLabel.TextColor3=muted
         local control={}
+        function control:SetText(value) textLabel.Text=value end
         function control:AddKeyPicker(id,info)
             Options[id]={Value=info.Default}
             textLabel.Text=text .. ': ' .. info.Default
@@ -324,6 +352,201 @@ listen(UIInput.InputBegan,function(input,processed)
     if callback then callback() end
 end)
 
+-- Specialized versions return before any match-only dependencies or loops load.
+if HubMode~='Basic' then
+    local RS=game:GetService('ReplicatedStorage')
+    local RunService=game:GetService('RunService')
+    local session={Alive=true,Connections={}}
+    Env.SoraHubSession=session
+    title.Text='SORA HUB | '..HubMode
+    footer.Text='End Menu'
+    local window=Library:CreateWindow()
+    local farming=window:AddTab('Farming')
+    local settings=window:AddTab('UI Settings')
+    local menu=settings:AddRightGroupbox('Menu')
+    local layout=settings:AddLeftGroupbox('Window')
+    local menuButton=menu:AddButton({Text='Menu: End',Func=function() end})
+    createKeyControl('SoraMenuKey','Menu','End',menuButton,visibility)
+    layout:AddSlider('SoraUIScale',{Text='UI Size (%)',Default=100,Min=70,Max=130,Rounding=0})
+    Options.SoraUIScale:OnChanged(function() uiZoom=Options.SoraUIScale.Value/100;fit() end)
+    layout:AddButton({Text='Center Window',Func=function() root.Position=UDim2.fromScale(0.5,0.5) end})
+    menu:AddButton({Text='Unload Sora Hub',Func=function() Library:Unload() end})
+    Library:OnUnload(function()
+        session.Alive=false
+        if Env.SoraHubSession==session then Env.SoraHubSession=nil end
+    end)
+    session.Cleanup=function() Library:Unload() end
+    local function remote(name)
+        local folder=RS:FindFirstChild('Remotes')
+        local object=folder and folder:FindFirstChild(name)
+        return object and object:IsA('RemoteEvent') and object or nil
+    end
+
+    if HubMode=='Daily Challenge' then
+        local group=farming:AddLeftGroupbox('Daily Challenge')
+        group:AddLabel('Supports the 3 original layouts.')
+        group:AddLabel('Starts disabled. Stop at any time.')
+        local status=group:AddLabel('Status: idle')
+        local auto=group:AddToggle('SoraAutoDailyChallenge',{Text='Auto Daily Challenge',Default=false,
+            Tooltip='Uses the original shots for three known layouts. Unknown layouts are not fired on.'})
+        local layouts={
+            {spot=Vector3.new(342.4703674316406,3.814638137817383,-713.7109985351562),
+             direction=Vector3.new(0.9485578536987305,-0.28204798698425293,0.1438293308019638),
+             facing=Vector3.new(0.9885718822479248,0.016017595306038857,0.14989666640758514)},
+            {spot=Vector3.new(298.120361328125,3.814638137817383,-758.5650024414062),
+             direction=Vector3.new(0.17995981872081757,-0.3644046187400818,-0.9136869311332703),
+             facing=Vector3.new(0.19315169751644135,0.01585335098206997,-0.9810408353805542)},
+            {spot=Vector3.new(253.4203643798828,3.814638137817383,-713.7109985351562),
+             direction=Vector3.new(-0.9260265231132507,-0.3074670732021332,-0.21894952654838562),
+             facing=Vector3.new(-0.9730885624885559,0.016010480001568794,-0.2298746258020401)},
+        }
+        local elapsed,lastShot,heldBall,attempts=0,-math.huge,nil,0
+        auto:OnChanged(function()
+            elapsed,lastShot,heldBall,attempts=0,-math.huge,nil,0
+            if auto.Value and not remote('UseKeyboardSkillRemote') then
+                auto:SetValue(false)
+                status:SetText('Shot remote unavailable.')
+            else status:SetText(auto.Value and 'Waiting for the ball...' or 'Status: stopped') end
+        end)
+        listen(RunService.Heartbeat,function(dt)
+            if not session.Alive or not auto.Value then return end
+            elapsed=elapsed+dt
+            if elapsed<0.2 then return end
+            elapsed=0
+            local character=UIPlayer.Character
+            local ball=character and character:FindFirstChild('Ball')
+            local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+            if not ball or not humanoid or humanoid.Health<=0 then
+                heldBall,attempts=nil,0
+                status:SetText('Waiting for the ball...')
+                return
+            end
+            if ball~=heldBall then heldBall,attempts=ball,0 end
+            local field=workspace:FindFirstChild('GameField')
+            local keepers=field and field:FindFirstChild('BlueLockmans')
+            local spot=keepers and keepers:FindFirstChild('Spot1')
+            if not spot or not spot:IsA('BasePart') then status:SetText('Waiting for challenge layout...');return end
+            local shot
+            for _,entry in ipairs(layouts) do
+                if (spot.Position-entry.spot).Magnitude<=0.75 then shot=entry;break end
+            end
+            if not shot then status:SetText('Unrecognized layout; waiting.');return end
+            if os.clock()-lastShot<0.75 then return end
+            if attempts>=3 then
+                auto:SetValue(false)
+                status:SetText('No shot accepted; paused.')
+                return
+            end
+            local event=remote('UseKeyboardSkillRemote')
+            if not event then auto:SetValue(false);status:SetText('Shot remote unavailable.');return end
+            lastShot,attempts=os.clock(),attempts+1
+            local ok=pcall(function() event:FireServer('PunchBall',ball,1.25,shot.direction,shot.facing) end)
+            if not ok then auto:SetValue(false);status:SetText('Shot request failed; paused.');return end
+            status:SetText('Shot sent; waiting for next ball.')
+        end)
+    else
+        local group=farming:AddLeftGroupbox('Auto Spin')
+        local targets=farming:AddRightGroupbox('Stop On These Results')
+        group:AddLabel('Consumes your available spins.')
+        group:AddLabel('Never purchases spins or Robux.')
+        group:AddDropdown('SoraSpinType',{Text='Spin Type',Values={'Weapon','Prodigy'},Default=1})
+        group:AddDropdown('SoraSpinSlot',{Text='Weapon Slot',Values={'1','2','3'},Default=1})
+        group:AddSlider('SoraSpinLimit',{Text='Max Requests This Run',Default=25,Min=1,Max=500,Rounding=0})
+        targets:AddDropdown('SoraSpinWeapons',{Text='Wanted Weapons',Multi=true,Values={
+            'Direct Shot','Finesse Shot','Explosive Acceleration','Stealthy Steps','Jumping Power',
+            'Immense Speed','Mark Smell','Drive Shot','Elastic Dribbling','Trapping',
+            'Perfect Kick Accuracy','Villainous Soccer','Total Defense','Godspeed','Kaiser Impact'}})
+        targets:AddDropdown('SoraSpinProdigies',{Text='Wanted Prodigies',Multi=true,
+            Values={'None','Intellect','Punch','Defense','Speed','Dribble','Ball Control'}})
+        targets:AddLabel('Choose one or more wanted results.')
+        targets:AddLabel('Stops before rerolling a match.')
+        local status=group:AddLabel('Status: idle')
+        local resultLabel=group:AddLabel('Current: --')
+        local countLabel=group:AddLabel('Requests: 0')
+        local auto=group:AddToggle('SoraAutoSpin',{Text='Auto Spin',Default=false,
+            Tooltip='Spends available spins until a chosen result or run limit. Pauses if a result is not confirmed.'})
+        local count,pending,elapsed,spinData=0,nil,0,nil
+        local function selection()
+            local weapon=Options.SoraSpinType.Value=='Weapon'
+            return weapon and ('Weapon'..Options.SoraSpinSlot.Value) or 'Prodigy',
+                weapon and Options.SoraSpinWeapons.Value or Options.SoraSpinProdigies.Value,
+                weapon and 'SpinWeapon' or 'SpinProdigy'
+        end
+        local function stop(message)
+            if auto.Value then auto:SetValue(false) end
+            status:SetText(message)
+        end
+        local function spinCounts(data)
+            local counts={}
+            -- The source does not document balance names. Observe replicated
+            -- numeric spin counters when available; never assume a wallet API.
+            for name,value in pairs(data:GetAttributes()) do
+                if type(value)=='number' and name:lower():find('spin',1,true) then counts[name]=value end
+            end
+            return counts
+        end
+        auto:OnChanged(function()
+            pending,elapsed=nil,0
+            if not auto.Value then status:SetText('Status: stopped');return end
+            count=0
+            countLabel:SetText('Requests: 0')
+            local attribute,wanted,eventName=selection()
+            spinData=UIPlayer:FindFirstChild('Data')
+            if not next(wanted) then stop('Choose wanted results first.');return end
+            if not spinData or spinData:GetAttribute(attribute)==nil then stop('Slot / data unavailable.');return end
+            if not remote(eventName) then stop('Spin remote unavailable.');return end
+            status:SetText('Status: starting')
+        end)
+        for _,id in ipairs({'SoraSpinType','SoraSpinSlot','SoraSpinWeapons','SoraSpinProdigies','SoraSpinLimit'}) do
+            Options[id]:OnChanged(function()
+                if auto.Value then stop('Settings changed; restart to spin.') end
+            end)
+        end
+        listen(RunService.Heartbeat,function(dt)
+            if not session.Alive or not auto.Value then return end
+            elapsed=elapsed+dt
+            if elapsed<0.1 then return end
+            elapsed=0
+            local attribute,wanted,eventName=selection()
+            if UIPlayer:FindFirstChild('Data')~=spinData or not spinData then stop('Player data changed; paused.');return end
+            local current=spinData:GetAttribute(attribute)
+            if type(current)~='string' then stop('Result unavailable; paused.');return end
+            resultLabel:SetText('Current: '..current)
+            if wanted[current] then stop('Found: '..current);return end
+            local now=os.clock()
+            if pending then
+                local confirmed=current~=pending.before
+                if not confirmed then
+                    for name,previous in pairs(pending.counts) do
+                        local value=spinData:GetAttribute(name)
+                        if type(value)=='number' and value<previous then confirmed=true;break end
+                    end
+                end
+                if confirmed and not pending.confirmedAt then pending.confirmedAt=now end
+                -- Allow the result to follow a balance update before another request.
+                if pending.confirmedAt and now-pending.confirmedAt>=0.75 and now-pending.sent>=1 then
+                    pending=nil
+                elseif now-pending.sent>=10 then stop('No result confirmed; paused.');return
+                else return end
+            end
+            if count>=Options.SoraSpinLimit.Value then stop('Run limit reached.');return end
+            local event=remote(eventName)
+            if not event then stop('Spin remote unavailable.');return end
+            pending={before=current,counts=spinCounts(spinData),sent=now}
+            count=count+1
+            countLabel:SetText('Requests: '..count)
+            local ok=pcall(function()
+                if eventName=='SpinWeapon' then event:FireServer(tonumber(Options.SoraSpinSlot.Value))
+                else event:FireServer() end
+            end)
+            if not ok then stop('Spin request failed; paused.');return end
+            status:SetText('Waiting for spin result...')
+        end)
+    end
+    Library:Notify('Sora Hub '..HubMode..' loaded. Farming starts disabled.',6)
+    return
+end
+
 local Players = game:GetService('Players')
 local RS = game:GetService('ReplicatedStorage')
 local UIS = game:GetService('UserInputService')
@@ -340,7 +563,7 @@ local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=8,
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
-    BallPrediction=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
+    BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75, CanonKaiser=true,
 }
 local Character, Root, Humanoid
@@ -526,7 +749,7 @@ end
 
 local Window = Library:CreateWindow({ Title='Sora Hub', Center=true, AutoShow=true, TabPadding=8, MenuFadeTime=0.2 })
 local Main = Window:AddTab('Main')
-local FarmTab = Window:AddTab('Autofarm')
+local FarmTab = Window:AddTab('Farming')
 local Settings = Window:AddTab('Settings')
 local UITab = Window:AddTab('UI Settings')
 local Defense = Main:AddLeftGroupbox('Defense')
@@ -1323,8 +1546,7 @@ do
     end)
 end
 
-local cleanupMetavision
-do
+local cleanupMetavision=(function()
 -- Local visual aids: no remotes are sent by these features.
 local visualFolder=Instance.new('Folder')
 visualFolder.Name='SoraHubVisuals'
@@ -1363,6 +1585,15 @@ local function hideLanding()
     ringCenter=nil
     for _,part in ipairs(landingRing) do part.Transparency=1 end
 end
+local etaAnchor=visualPart('BallETAAnchor')
+etaAnchor.Size=Vector3.new(0.1,0.1,0.1)
+local etaGui=ui('BillboardGui',etaAnchor,{Size=UDim2.fromOffset(60,22),
+    StudsOffsetWorldSpace=Vector3.new(0,1.55,0),AlwaysOnTop=true,MaxDistance=180,Enabled=false})
+local etaText=ui('TextLabel',etaGui,{Text='',Font=Enum.Font.GothamBold,TextSize=12,
+    TextColor3=Color3.fromRGB(255,227,151),BackgroundColor3=Color3.fromRGB(23,24,34),
+    BackgroundTransparency=0.22,BorderSizePixel=0,Size=UDim2.fromScale(1,1)})
+rounded(etaText,5)
+local function hideBallETA() etaGui.Enabled=false end
 local visualPlayers,visualBall={},nil
 local nextRosterRefresh,nextBallSearch,nextFilterRefresh=0,0,0
 local filterBall
@@ -1411,16 +1642,21 @@ local function landingPoint(ball,params)
         if obstacle then lead=obstacle.Position-position end
         local projected=position+lead
         local floor=workspace:Raycast(projected+Vector3.new(0,2,0),Vector3.new(0,-(radius+5),0),params)
-        return floor and floor.Normal.Y>=0.7 and floor.Position or ground.Position
+        local point=floor and floor.Normal.Y>=0.7 and floor.Position or ground.Position
+        local seconds=velocity.Magnitude>2 and lead.Magnitude/math.max(velocity.Magnitude,0.1) or nil
+        return point,seconds
     end
     local acceleration=Vector3.new(0,-workspace.Gravity,0)
     local dt=0.1
     local offset=Vector3.new(0,math.max(0,radius-0.05),0)
-    for _=1,40 do
+    for step=1,40 do
         local nextPosition=position+velocity*dt+acceleration*(0.5*dt*dt)
         local hit=workspace:Raycast(position-offset,nextPosition-position,params)
         if hit then
-            if hit.Normal.Y>=0.7 then return hit.Position end
+            if hit.Normal.Y>=0.7 then
+                local fraction=math.clamp(hit.Distance/math.max((nextPosition-position).Magnitude,0.001),0,1)
+                return hit.Position,(step-1+fraction)*dt
+            end
             return
         end
         position=nextPosition
@@ -1428,17 +1664,23 @@ local function landingPoint(ball,params)
     end
 end
 local function updateBallVisuals()
-    if not State.BallPrediction then return end
-    if workspace:GetAttribute('GameEnded') then hideLanding(); return end
+    if not State.BallPrediction and not State.BallETA then return end
+    if workspace:GetAttribute('GameEnded') then hideLanding();hideBallETA();return end
     local now=os.clock()
     local ball=currentVisualBall(now)
-    if not ball then hideLanding(); return end
+    if not ball then hideLanding();hideBallETA();return end
     for _,player in ipairs(visualPlayers) do
-        if player.Character and ball:IsDescendantOf(player.Character) then hideLanding(); return end
+        if player.Character and ball:IsDescendantOf(player.Character) then hideLanding();hideBallETA();return end
     end
-    local landing=landingPoint(ball,visualRayParams(ball,now))
-    if not landing then hideLanding(); return end
+    local landing,seconds=landingPoint(ball,visualRayParams(ball,now))
+    if not landing then hideLanding();hideBallETA();return end
     local center=landing+Vector3.new(0,0.12,0)
+    if State.BallETA and seconds and seconds>=0.1 then
+        etaAnchor.CFrame=CFrame.new(center)
+        etaText.Text=string.format('~%.1fs',seconds)
+        etaGui.Enabled=true
+    else hideBallETA() end
+    if not State.BallPrediction then hideLanding();return end
     if ringCenter and (center-ringCenter).Magnitude<0.03 then return end
     local transform=CFrame.new(center)
     for i,part in ipairs(landingRing) do
@@ -1989,6 +2231,9 @@ end
 local Visuals=Main:AddRightGroupbox('Metavision')
 toggle(Visuals,'BallPrediction','Ball Landing / Rolling Marker',nil,function(enabled) if not enabled then hideLanding() end end,
     'Shows an estimated landing point in the air, or a short forward marker while the ball rolls.')
+toggle(Visuals,'BallETA','Ball ETA',nil,function(enabled)
+    if not enabled then hideBallETA() end
+end,'Shows estimated seconds until the ball reaches its landing point or short rolling lead. Hides while the ball is still.')
 toggle(Visuals,'ReboundAlert','Rebound Alert',nil,function(enabled)
     if not enabled then reboundUntil=0;hideCue(reboundCue) end
 end,'Shows a small orange marker after the free ball sharply changes direction. The REBOUND label marks its short-term ground position.')
@@ -2030,21 +2275,21 @@ connect(RunService.Heartbeat,function(dt)
         recordBallPath(now)
         if State.ReboundAlert or State.PassReception then updateFieldCues(now) end
     end
-    if State.BallPrediction and visualElapsed>=0.05 then visualElapsed=0; updateBallVisuals() end
+    if (State.BallPrediction or State.BallETA) and visualElapsed>=0.05 then visualElapsed=0;updateBallVisuals() end
     if replayStarted and replayElapsed>=0.2 then replayElapsed=0;updateReplay(os.clock()) end
     if State.OffscreenBall and arrowElapsed>=0.05 then arrowElapsed=0; updateOffscreenBall() end
     if (State.OpponentCooldowns or State.OpponentReady) and cooldownElapsed>=0.25 then cooldownElapsed=0; updateCooldownPanel(os.clock()) end
     if State.HighlightTDs and tdHighlightElapsed>=0.2 then tdHighlightElapsed=0; updateTDHighlights() end
 end)
 
-cleanupMetavision=function()
+return function()
     clearReplay()
     offscreenGui:Destroy()
     clearTDHighlights()
     detachCooldowns()
     visualFolder:Destroy()
 end
-end
+end)()
 
 -- Custom appearance controls; recolor existing widgets and future toggle states.
 local Appearance = UITab:AddLeftGroupbox('Colors')
