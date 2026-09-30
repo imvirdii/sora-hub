@@ -69,6 +69,38 @@ local function holder(ball)
         parent=parent.Parent
     end
 end
+-- The original project identifies the match ball by GameBall on its container,
+-- not by a part named GameBall. Cache top-level Ball containers only.
+local ballContainers={}
+local function cacheBall(object)
+    if object.Name=='Ball' then ballContainers[object]=true end
+end
+for _,object in ipairs(workspace:GetChildren()) do cacheBall(object) end
+connect(workspace.ChildAdded,cacheBall)
+connect(workspace.ChildRemoved,function(object) ballContainers[object]=nil end)
+local function isGameBall(ball)
+    local object=ball
+    for _=1,3 do
+        if not object or object==workspace then return false end
+        if object:GetAttribute('GameBall') then return true end
+        object=object.Parent
+    end
+    return false
+end
+local function looseGameBall()
+    if workspace:GetAttribute('GameEnded') then return end
+    local found
+    for object in pairs(ballContainers) do
+        if object.Parent==workspace and object:GetAttribute('GameBall') then
+            local ball=part(object)
+            if ball and not holder(ball) then
+                if found and found~=ball then return end -- Ambiguous: don't guess.
+                found=ball
+            end
+        end
+    end
+    return found
+end
 local function ready(character,humanoid)
     if not humanoid or humanoid.Health<=0 or character:FindFirstChild('Ball')
         or character:FindFirstChild('HoldingSkill') or Player:GetAttribute('UsingSkill')
@@ -207,6 +239,53 @@ connect(Players.PlayerRemoving,function(player)
     captured[player]=nil
     for ball,r in pairs(tracked) do if r.shooter==player then tracked[ball]=nil end end
 end)
+local function trackBall(ball,shooter,now)
+    if not ball or not ball.Parent then return false end
+    local old=tracked[ball]
+    -- Hold, UseSkill and Kick can describe the same release. Keep the sample
+    -- history and one-shot request flag when an acknowledgement arrives later.
+    if old and old.shooter==shooter and not holder(ball) then return true end
+    local count=0;local oldest,oldestAt
+    for b,r in pairs(tracked) do
+        count=count+1
+        if not oldestAt or r.started<oldestAt then oldest,oldestAt=b,r.started end
+    end
+    if count>=Config.MaxTracked and oldest then tracked[oldest]=nil end
+    tracked[ball]={shooter=shooter,started=now,released=false,fired=false}
+    report(holder(ball) and 'PKA ball identified; waiting for release' or 'PKA release detected; measuring curve',true)
+    return true
+end
+local function pollCaptures(now)
+    for shooter,r in pairs(captured) do
+        if excluded(shooter) or shooter.Character~=r.character then
+            captured[shooter]=nil
+        elseif now-r.at>5 then
+            captured[shooter]=nil
+            report('Wind-up expired: no released ball identified',true)
+        else
+            -- Hold may precede replication of the character's Ball folder.
+            if not r.ball or not r.ball.Parent then r.ball=ownedBall(shooter) end
+            if r.ball and isGameBall(r.ball) then r.gameBall=true end
+            -- Some releases replace the carried object with workspace.Ball.Ball.
+            -- Only associate that replacement after this shooter held the match ball.
+            if r.gameBall and not ownedBall(shooter) then
+                local replacement=looseGameBall()
+                if replacement and replacement~=r.beforeRelease then r.ball=replacement end
+            end
+            local ball=r.ball
+            if ball and ball.Parent and ball:IsDescendantOf(workspace) then
+                local owner=holder(ball)
+                if not owner then
+                    trackBall(ball,shooter,now)
+                    captured[shooter]=nil
+                elseif owner~=shooter then
+                    captured[shooter]=nil
+                    report('PKA tracking cancelled: ball changed holder',true)
+                end
+            end
+        end
+    end
+end
 connect(Event.OnClientEvent,function(action,shooter,style,skill,value)
     if not Session.Alive or not Config.Enabled or typeof(shooter)~='Instance' or not shooter:IsA('Player') then return end
     if style~='Perfect Kick Accuracy' and not ShotSkills[skill] then return end
@@ -215,26 +294,20 @@ connect(Event.OnClientEvent,function(action,shooter,style,skill,value)
     if excluded(shooter) then report('Shot ignored: teammate, self or exception',true);return end
     local now=os.clock()
     if action=='Hold' then
-        captured[shooter]={ball=part(value) or ownedBall(shooter),at=now}
+        local ball=part(value) or ownedBall(shooter)
+        captured[shooter]={ball=ball,at=now,character=shooter.Character,
+            gameBall=ball and isGameBall(ball),beforeRelease=looseGameBall()}
         report('PKA wind-up detected; waiting for release',true);return
     end
     if not ShotActions[action] then report('PKA event seen: '..tostring(action),true);return end
     local saved=captured[shooter]
     local ball=part(value) or ownedBall(shooter) or (saved and now-saved.at<5 and saved.ball)
+    if saved and saved.gameBall and not ownedBall(shooter) then ball=looseGameBall() or ball end
     if not ball or not ball.Parent then
         report('PKA event has no identifiable ball; check console',true);return
     end
-    local old=tracked[ball]
-    if old and old.shooter==shooter and now-old.started<0.5 then return end
-    -- A fresh release from the same shooter can rearm a practice ball.
-    local count=0;local oldest,oldestAt
-    for b,r in pairs(tracked) do
-        count=count+1
-        if not oldestAt or r.started<oldestAt then oldest,oldestAt=b,r.started end
-    end
-    if count>=Config.MaxTracked and oldest then tracked[oldest]=nil end
-    tracked[ball]={shooter=shooter,started=now,released=false,fired=false}
-    report('PKA ball identified; measuring curve',true)
+    trackBall(ball,shooter,now)
+    if not holder(ball) then captured[shooter]=nil end
 end)
 local elapsed=0
 connect(RunService.Heartbeat,function(dt)
@@ -243,7 +316,9 @@ connect(RunService.Heartbeat,function(dt)
     if elapsed<Config.Interval then return end
     elapsed=0
     local now=os.clock()
-    for player,r in pairs(captured) do if now-r.at>5 then captured[player]=nil end end
+    -- Poll wind-ups BEFORE the idle early return. A separate release broadcast
+    -- is not required when the captured ball leaves the shooter's character.
+    pollCaptures(now)
     if not next(tracked) then return end
     local character=Player.Character
     local root=character and character:FindFirstChild('HumanoidRootPart')
@@ -253,11 +328,17 @@ connect(RunService.Heartbeat,function(dt)
     for ball,r in pairs(tracked) do
         if not ball.Parent or not ball:IsDescendantOf(workspace) or now-r.started>Config.MaxAge or excluded(r.shooter) then
             tracked[ball]=nil
-        elseif not r.fired then
+        elseif r.fired then
+            if holder(ball) then tracked[ball]=nil end
+        else
             local owner=holder(ball)
             if owner then
                 if r.released or owner~=r.shooter then tracked[ball]=nil end
             else
+                if not r.released then
+                    r.started=now
+                    report('PKA release detected; measuring curve',true)
+                end
                 r.released=true
                 if sample(r,ball.Position,now) and r.velocity.Magnitude>2 then
                     -- Finite differences measure interval-average velocity;
