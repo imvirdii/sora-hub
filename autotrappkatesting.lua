@@ -102,20 +102,21 @@ local function looseGameBall()
     return found
 end
 local function ready(character,humanoid)
-    if not humanoid or humanoid.Health<=0 or character:FindFirstChild('Ball')
-        or character:FindFirstChild('HoldingSkill') or Player:GetAttribute('UsingSkill')
-        or workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false end
+    if not humanoid or humanoid.Health<=0 then return false,'character unavailable' end
+    if character:FindFirstChild('Ball') then return false,'already holding a ball' end
+    if character:FindFirstChild('HoldingSkill') or Player:GetAttribute('UsingSkill') then return false,'another skill active' end
+    if workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false,'skills disabled' end
     local state=Player:FindFirstChild('PlayerStateFolder')
-    if state and state:FindFirstChild('Stun') then return false end
+    if state and state:FindFirstChild('Stun') then return false,'stunned' end
     local cd=RS:FindFirstChild('CooldownsFolder')
-    if cd and cd:FindFirstChild(tostring(Player.UserId)..Config.Trap) then return false end
+    if cd and cd:FindFirstChild(tostring(Player.UserId)..Config.Trap) then return false,Config.Trap..' on cooldown' end
     local equipped=Player:FindFirstChild('EquippedSkills')
     if equipped then
         for slot,skill in pairs(equipped:GetAttributes()) do
             if slot:match('^Slot') and skill==Config.Trap then return true end
         end
     end
-    return false
+    return false,Config.Trap..' not equipped'
 end
 -- First intersection with a sphere along one predicted segment. Sweeping
 -- between samples prevents fast balls skipping over the trigger volume.
@@ -135,8 +136,8 @@ local function arrival(position,velocity,acceleration,root)
     local relative=position-root.Position
     local v=velocity-root.AssemblyLinearVelocity
     local prev=relative
-    -- Do not fire on a ball already leaving our radius.
-    if relative.Magnitude<=Config.Radius and relative:Dot(v)>=0 then return end
+    -- A close ball is actionable even before curve samples stabilize.
+    if relative.Magnitude<=Config.Radius then return 0 end
     for t=Config.PathStep,Config.Horizon+0.000001,Config.PathStep do
         local nextPoint=relative+v*t+acceleration*(0.5*t*t)
         local entry=segmentEntry(prev,nextPoint,Config.Radius)
@@ -172,7 +173,9 @@ local function sample(record,position,now)
     record.previousVelocity,record.previousDt=measured,dt
     record.position,record.at=position,now
     record.count=record.count+1
-    return record.count>=2
+    -- Replication can alternate stationary and moving frames. Such jumps reset
+    -- acceleration confidence, but must not discard a usable velocity estimate.
+    return true
 end
 local Gui=Instance.new('ScreenGui')
 Gui.Name='PKAAutoTrapTest';Gui.ResetOnSpawn=false;Gui.Parent=Player:WaitForChild('PlayerGui')
@@ -325,9 +328,11 @@ connect(RunService.Heartbeat,function(dt)
     local humanoid=character and character:FindFirstChildOfClass('Humanoid')
     if not root or not humanoid or humanoid.Health<=0 then table.clear(tracked);return end
     local best,bestEta=nil,math.huge
+    local nearest,trackingMessage=math.huge,nil
     for ball,r in pairs(tracked) do
         if not ball.Parent or not ball:IsDescendantOf(workspace) or now-r.started>Config.MaxAge or excluded(r.shooter) then
             tracked[ball]=nil
+            report('PKA tracking ended; waiting for next shot')
         elseif r.fired then
             if holder(ball) then tracked[ball]=nil end
         else
@@ -340,24 +345,42 @@ connect(RunService.Heartbeat,function(dt)
                     report('PKA release detected; measuring curve',true)
                 end
                 r.released=true
-                if sample(r,ball.Position,now) and r.velocity.Magnitude>2 then
+                local position=ball.Position
+                local distance=(position-root.Position).Magnitude
+                local sampled=sample(r,position,now)
+                local eta
+                -- Proximity never waits for curve warm-up or a speed threshold.
+                if distance<=Config.Radius then
+                    eta=0
+                elseif sampled then
                     -- Finite differences measure interval-average velocity;
                     -- extrapolate half an interval to estimate current velocity.
                     local velocity=r.velocity+r.acceleration*(0.5*(r.previousDt or 0))
-                    local eta=arrival(ball.Position,velocity,r.acceleration,root)
-                    if eta and eta<bestEta then best,bestEta=r,eta end
+                    eta=arrival(position,velocity,r.acceleration,root)
+                end
+                if eta and eta<bestEta then best,bestEta=r,eta end
+                if distance<nearest then
+                    nearest=distance
+                    trackingMessage=string.format('Tracking: %.1f studs | radius %.0f | %s',distance,Config.Radius,
+                        sampled and 'no entry predicted yet' or 'sampling movement')
                 end
             end
         end
     end
     if best then
-        report(string.format('Predicted entry: %.0f ms',bestEta*1000))
-        if bestEta<=Config.Lead+Config.Interval and now-lastRequest>=Config.RequestGap then
-            if ready(character,humanoid) then
+        if bestEta>Config.Lead+Config.Interval then
+            report(string.format('Predicted entry: %.0f ms',bestEta*1000))
+        elseif now-lastRequest<Config.RequestGap then
+            report('Waiting: trap request cooldown')
+        else
+            local canTrap,reason=ready(character,humanoid)
+            if canTrap then
                 best.fired=true;lastRequest=now
                 Event:FireServer(TrapActions[Config.Trap],Config.Trap)
                 report('Trap requested: '..Config.Trap,true)
-            else report('Waiting: trap unequipped, on cooldown or blocked') end
+            else report('Waiting: '..reason) end
         end
+    elseif trackingMessage then
+        report(trackingMessage)
     end
 end)
