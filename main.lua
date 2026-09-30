@@ -562,7 +562,7 @@ local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=15,
-    AutoTD = false, TDRange = 8, TDPrediction = 0.12, TDAdaptive=true, TDHold=0.4, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
+    AutoTD = false, TDRange = 8, TDPrediction = 0.12, TDAdaptive=true, TDHold=0.4, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true, AutoAimBike = false,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 85, CanonKaiser=true,
@@ -570,6 +570,8 @@ local State = {
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
 local pendingPlayer, pendingAt, bikeArmed = nil, 0, false
+local bikeAimUntil=0
+local aimStep
 local lastTrap, lastBikeTrap, lastRush, lastTackle, lastM2 = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 local lastAutoTD,tdFacingUntil,tdTarget=-math.huge,0,nil
 local lastOwner, wasSprinting, dashDirection
@@ -662,6 +664,7 @@ local function bindCharacter(newCharacter)
     restoreSpeed()
     Character, Root, Humanoid = newCharacter, nil, nil
     speedBase, speedWritten, pendingPlayer, bikeArmed = nil, nil, nil, false
+    bikeAimUntil=0
     wasSprinting, dashDirection = false, nil
     tdFacingUntil,tdTarget=0,nil
     local newRoot = newCharacter:WaitForChild('HumanoidRootPart', 10)
@@ -795,7 +798,13 @@ toggle(Attack,'AutoDribble','Auto Dribble','F7',nil,
     'Dodges attack animations and fast opponents closing directly into you. Early prediction can also react to a runner.')
 Attack:AddSlider('SoraDribbleRange',{Text='Dribble vs Tackle Range',Default=15,Min=15,Max=30,Rounding=0})
 Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDribbleRange.Value end)
-toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
+toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function()
+    bikeArmed=false;bikeAimUntil=0
+end)
+toggle(Attack,'AutoAimBike','Auto Aim Bike',nil,function(enabled)
+    bikeAimUntil=0
+    if enabled and not State.AimAllowed then Toggles.SoraAutoAimBike:SetValue(false) end
+end,'Uses Auto Aim for one second whenever Auto Bike fires, with the same goal corners and crossbar limit.')
 toggle(Attack,'CanonKaiser','Canon Kaiser',nil,updateCanonKaiser)
 toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
@@ -808,6 +817,7 @@ toggle(General, 'AimAllowed', 'Allow Auto Aim', nil, function(enabled)
     if not enabled then
         Toggles.SoraShootAfterAimed:SetValue(false)
         Toggles.SoraAutoAim:SetValue(false)
+        Toggles.SoraAutoAimBike:SetValue(false)
         releaseRotation()
     end
 end)
@@ -977,6 +987,10 @@ local function bikeInput(input, processed)
         local ball = currentCharacter and currentCharacter:FindFirstChild('Ball')
         local currentRoot = currentCharacter and currentCharacter:FindFirstChild('HumanoidRootPart')
         if not ball or not currentRoot then return end
+        if State.AutoAimBike and State.AimAllowed then
+            bikeAimUntil=os.clock()+1
+            if aimStep then aimStep(true) end
+        end
         Punch:FireServer('LobPass', ball, currentRoot.Position + Vector3.new(0,50,0))
         Event:FireServer('UseSkill', 'Impact Bicycle')
         return
@@ -1339,7 +1353,6 @@ local function defenseStep(now)
 end
 
 -- Resolve real goal mouths; no helper parts or per-frame raycast allocations.
-local aimStep
 do
     local goals,nextRefresh,selected,side={},0,nil,nil
     local previousDirection,previousGoal,previousSide
@@ -1365,14 +1378,14 @@ do
         end
         goals=found
     end
-    aimStep=function()
+    aimStep=function(forBike)
         local function stop()
             selected,side=nil,nil
             previousDirection,previousGoal,previousSide=nil,nil,nil
             releaseRotation()
             return false
         end
-        if not State.AutoAim or not State.AimAllowed then return stop() end
+        if not (State.AutoAim or forBike) or not State.AimAllowed then return stop() end
         if not Root or not Root.Parent or not Humanoid or Humanoid.Health<=0 then return stop() end
         local camera=workspace.CurrentCamera
         if not camera or camera.CameraType==Enum.CameraType.Scriptable then return stop() end
@@ -1676,10 +1689,15 @@ end)
 local aimRenderName='SoraHubAim'
 RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
-    if trackAutoTD(os.clock()) then shootAfterAimStep(false);return end
-    local aimed=aimStep()
-    shootAfterAimStep(aimed)
-    if not (State.AutoAim and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
+    local now=os.clock()
+    if not State.AutoBike or not State.AutoAimBike or not State.AimAllowed then
+        bikeAimUntil=0
+    end
+    local bikeAiming=now<bikeAimUntil
+    if trackAutoTD(now) then shootAfterAimStep(false);return end
+    local aimed=aimStep(bikeAiming)
+    shootAfterAimStep(aimed and not bikeAiming)
+    if not ((State.AutoAim or bikeAiming) and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
     end
 end)
@@ -2679,6 +2697,7 @@ local function cleanup()
     if camera and originalFOV and State.LockFOV then camera.FieldOfView = originalFOV end
     if shaker and shaker.Update == noShake then shaker.Update = oldShake end
     pendingPlayer, bikeArmed = nil, false
+    bikeAimUntil=0
     if Env.SoraHubSession == Session then Env.SoraHubSession = nil end
 end
 Session.Cleanup = cleanup
