@@ -564,7 +564,7 @@ local State = {
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
-    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 70, CanonKaiser=true,
+    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 85, CanonKaiser=true,
 }
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
@@ -849,7 +849,7 @@ end })
 toggle(CameraGroup, 'LockFOV', 'Lock FOV', nil, function(enabled)
     if enabled then enforceFOV() elseif camera and originalFOV then camera.FieldOfView = originalFOV end
 end)
-CameraGroup:AddSlider('SoraFOV', { Text='FOV', Default=70, Min=70, Max=120, Rounding=0, Compact=false })
+CameraGroup:AddSlider('SoraFOV', { Text='FOV', Default=85, Min=85, Max=120, Rounding=0, Compact=false })
 Options.SoraFOV:OnChanged(function() State.FOV = Options.SoraFOV.Value; enforceFOV() end)
 
 local function getTeam(player)
