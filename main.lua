@@ -1464,21 +1464,14 @@ RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,funct
     end
 end)
 
--- Keep newly observed tackles active for their exported 0.9-second hitbox window.
--- A cooldown is only the start signal, not a one-time range check.
-local cleanupDribble
-do
+-- React to attack animation starts; cooldown replication arrives too late.
+local cleanupDribble=(function()
     local lastDribble=-math.huge
-    local tracks=setmetatable({}, {__mode='k'})
     local tackleThreats={}
-    local folder,added
-    local function stopWatching()
-        if added then added:Disconnect();added=nil end
-        folder=nil
-        table.clear(tracks)
-        table.clear(tackleThreats)
-    end
-    cleanupDribble=stopWatching
+    local watchers={}
+    -- Tackle ID inferred from the user's isolated tackle capture after excluding
+    -- the exported idle/walk/run IDs. TakeBall is verified in PowerLocal.
+    local attackAnimations={['12698810109']=0.9,['12698914098']=0.45}
     local function react(player,now)
         if not Session.Alive or not State.AutoDribble or now-lastDribble<0.35 then return false end
         if not player or player==Player or isExcepted(player) or sameTeam(player) then return false end
@@ -1491,7 +1484,18 @@ do
         if ps and ps:FindFirstChild('Stun') then return false end
         local other=player.Character
         local otherRoot=other and other:FindFirstChild('HumanoidRootPart')
-        if not otherRoot or (otherRoot.Position-Root.Position).Magnitude>State.DribbleRange then return false end
+        if not otherRoot then return false end
+        local offset=otherRoot.Position-Root.Position
+        if offset.Magnitude>State.DribbleRange then
+            -- Anticipate entry by at most 0.12 s / 3 studs, only for a known attack.
+            if offset.Magnitude>State.DribbleRange+3 then return false end
+            local relative=otherRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity
+            local speedSquared=relative:Dot(relative)
+            local ahead=speedSquared>0.01 and math.clamp(-offset:Dot(relative)/speedSquared,0,0.12) or 0
+            local lead=relative*ahead
+            if lead.Magnitude>3 then lead=lead.Unit*3 end
+            if (offset+lead).Magnitude>State.DribbleRange then return false end
+        end
         local amount=Player:GetAttribute('Dribbles')
         if type(amount)~='number' or amount<1 then return false end
         local away=Root.Position-otherRoot.Position
@@ -1510,33 +1514,54 @@ do
         Tackle:FireServer('Dribble',direction)
         return true
     end
-    local function syncTackles()
-        local current=RS:FindFirstChild('CooldownsFolder')
-        if current~=folder then
-            stopWatching();folder=current
-            if folder then
-                added=folder.ChildAdded:Connect(function(entry)
-                    if not Session.Alive or not State.AutoDribble then return end
-                    local id=entry.Name:match('^(%d+)Tackle$')
-                    local player=id and Players:GetPlayerByUserId(tonumber(id))
-                    if not player or player==Player or isExcepted(player) or sameTeam(player) then return end
+    local function unwatch(player)
+        local watcher=watchers[player]
+        if watcher then
+            for _,connection in pairs(watcher) do connection:Disconnect() end
+            watchers[player]=nil
+        end
+        tackleThreats[player]=nil
+    end
+    local function watch(player)
+        if player==Player or watchers[player] then return end
+        local watcher={}
+        watchers[player]=watcher
+        local function bind(character)
+            if watcher.animation then watcher.animation:Disconnect();watcher.animation=nil end
+            if watcher.descendant then watcher.descendant:Disconnect();watcher.descendant=nil end
+            tackleThreats[player]=nil
+            local function attach(animator)
+                if watcher.animation or not animator:IsA('Animator') or not animator.Parent:IsA('Humanoid') then return end
+                watcher.animation=animator.AnimationPlayed:Connect(function(track)
+                    if not Session.Alive or not State.AutoDribble or player.Character~=character then return end
+                    local id=track.Animation and track.Animation.AnimationId:match('%d+$')
+                    local window=id and attackAnimations[id]
+                    if not window or track.TimePosition>window then return end
+                    if isExcepted(player) or sameTeam(player) then return end
                     local now=os.clock()
-                    tackleThreats[player]={character=player.Character,expires=now+0.9,fired=react(player,now)}
+                    local active=tackleThreats[player]
+                    if active and active.track==track and now<active.expires then return end
+                    tackleThreats[player]={character=character,track=track,
+                        expires=now+math.min(window,(window-track.TimePosition)/math.max(math.abs(track.Speed),0.1)),
+                        fired=react(player,now)}
                 end)
             end
+            watcher.descendant=character.DescendantAdded:Connect(attach)
+            local humanoid=character:FindFirstChildOfClass('Humanoid')
+            local animator=humanoid and humanoid:FindFirstChildOfClass('Animator')
+            if animator then attach(animator) end
         end
+        watcher.character=player.CharacterAdded:Connect(bind)
+        if player.Character then bind(player.Character) end
     end
-    -- Attach immediately, so enabling the toggle does not leave a listener gap.
-    -- Existing cooldowns are deliberately not treated as fresh tackles.
-    syncTackles()
-    local elapsed,folderElapsed=0,0
+    for _,player in ipairs(Players:GetPlayers()) do watch(player) end
+    connect(Players.PlayerAdded,watch)
+    connect(Players.PlayerRemoving,unwatch)
+    local elapsed=0
     connect(RunService.Heartbeat,function(dt)
         if not Session.Alive then return end
-        folderElapsed=folderElapsed+dt
-        if folderElapsed>=0.5 then folderElapsed=0;syncTackles() end
         if not State.AutoDribble then
             table.clear(tackleThreats)
-            table.clear(tracks)
             return
         end
         elapsed=elapsed+dt
@@ -1544,35 +1569,18 @@ do
         elapsed=0
         local now=os.clock()
         for player,threat in pairs(tackleThreats) do
-            if now>=threat.expires or player.Parent~=Players or player.Character~=threat.character then
+            if now>=threat.expires or not threat.track.IsPlaying or player.Parent~=Players or player.Character~=threat.character then
                 tackleThreats[player]=nil
             elseif not threat.fired and react(player,now) then
                 threat.fired=true
             end
         end
-        if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent then return end
-        for _,player in ipairs(Players:GetPlayers()) do
-            if player~=Player and not isExcepted(player) and not sameTeam(player) then
-                local character=player.Character
-                local root=character and character:FindFirstChild('HumanoidRootPart')
-                if root and (root.Position-Root.Position).Magnitude<=State.DribbleRange then
-                    local humanoid=character:FindFirstChildOfClass('Humanoid')
-                    local animator=humanoid and humanoid:FindFirstChildOfClass('Animator')
-                    if animator then
-                        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-                            if track.Animation and track.Animation.AnimationId:match('%d+$')=='12698914098' then
-                                local record=tracks[track]
-                                if not record or track.TimePosition+0.01<record.position then record={fired=false};tracks[track]=record end
-                                record.position=track.TimePosition
-                                if not record.fired and track.TimePosition<=0.45 and react(player,os.clock()) then record.fired=true end
-                            end
-                        end
-                    end
-                end
-            end
-        end
     end)
-end
+    return function()
+        for player in pairs(watchers) do unwatch(player) end
+        table.clear(tackleThreats)
+    end
+end)()
 
 local cleanupMetavision=(function()
 -- Local visual aids: no remotes are sent by these features.
