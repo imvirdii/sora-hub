@@ -1378,8 +1378,9 @@ do
         if now>=nextRefresh then refreshGoals(now) end
         local frame=camera.CFrame
         local horizontal=Vector3.new(frame.LookVector.X,0,frame.LookVector.Z)
-        if horizontal.Magnitude<0.001 then
-            local facing=Root.CFrame.LookVector
+        if frame.LookVector.Y>0.94 or horizontal.Magnitude<0.001 then
+            -- Looking nearly straight up makes camera yaw a poor goal selector.
+            local facing=selected and selected.Parent and (selected.Position-Root.Position) or Root.CFrame.LookVector
             horizontal=Vector3.new(facing.X,0,facing.Z)
         end
         if horizontal.Magnitude<0.001 then return stop() end
@@ -1424,11 +1425,15 @@ do
         -- Cap both the shot-origin angle and the camera ray at the crossbar.
         -- This bounds the aim direction, not server-authored curve/lift physics.
         local maxPitch=math.atan2(ceiling-origin.Y,math.max(shotFlat,0.1))
-        local cameraFlat=tBest
+        local cameraToCorner=Vector3.new(corner.X-frame.Position.X,0,corner.Z-frame.Position.Z)
+        local cameraFlat=cameraToCorner.Magnitude
+        if cameraFlat<0.1 then return stop() end
         maxPitch=math.min(maxPitch,math.atan2(ceiling-frame.Position.Y,math.max(cameraFlat,0.1)))
         local pitch=math.asin(math.clamp(frame.LookVector.Y,-1,1))
         if pitch>maxPitch then
-            local direction=horizontal.Unit*math.cos(maxPitch)+Vector3.new(0,math.sin(maxPitch),0)
+            -- Correct yaw as well as pitch: retaining a skyward camera's yaw
+            -- can send camera-directed skills wide even when the body is aimed.
+            local direction=cameraToCorner.Unit*math.cos(maxPitch)+Vector3.new(0,math.sin(maxPitch),0)
             camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+direction)
         end
         lockRotation()
@@ -1483,9 +1488,10 @@ do
             return
         end
         if ball~=possession then possession,startedAt,nextCheck,sent=ball,nil,0,false end
-        if not aimed or sent or game.PlaceId==12467817668 then return end
+        if not aimed then startedAt=nil;return end
+        if sent or game.PlaceId==12467817668 then return end
         local now=os.clock()
-        if not startedAt then startedAt=now end
+        if not startedAt then startedAt=now;return end
         -- Bound the original readiness wait without yielding the render callback.
         if now-startedAt>1.5 or now<nextCheck then return end
         nextCheck=now+0.1
