@@ -9,8 +9,8 @@ local Player=Players.LocalPlayer
 local Event=RS:WaitForChild('Remotes'):WaitForChild('TranciverRemote')
 local Env=type(getgenv)=='function' and getgenv() or _G
 if Env.PKATrapTest then Env.PKATrapTest.Unload() end
-local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.35,
-    Interval=1/60,Horizon=0.65,PathStep=0.02,MaxAcceleration=250,
+local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.50,
+    Interval=1/60,Horizon=0.85,PathStep=0.02,MaxAcceleration=250,
     MaxAge=8,MaxTracked=4,RequestGap=0.5,IgnoreTeammates=true,Debug=true}
 local Exceptions={TheNextNagi=true,LeoTheDominican=true}
 local ShotSkills={['Trivela (Shot)']=true}
@@ -244,7 +244,7 @@ trapButton=button('Trap: '..Config.Trap,10,68,290,function()
     choice=choice%#choices+1;Config.Trap=choices[choice];trapButton.Text='Trap: '..Config.Trap
 end)
 local radiusText=label('Trigger radius: 12 studs',103)
-local leadText=label('Activation lead: 350 ms',160)
+local leadText=label('Activation lead: 500 ms',160)
 button('- radius',10,129,140,function()
     Config.Radius=math.max(3,Config.Radius-1);radiusText.Text='Trigger radius: '..Config.Radius..' studs'
 end)
@@ -252,7 +252,7 @@ button('+ radius',160,129,140,function()
     Config.Radius=math.min(40,Config.Radius+1);radiusText.Text='Trigger radius: '..Config.Radius..' studs'
 end)
 local function lead(delta)
-    Config.Lead=math.clamp(Config.Lead+delta,0,0.5)
+    Config.Lead=math.clamp(Config.Lead+delta,0,0.8)
     leadText.Text=string.format('Activation lead: %.0f ms',Config.Lead*1000)
 end
 button('- timing',10,186,140,function()lead(-0.01)end)
@@ -327,6 +327,23 @@ local function pollCaptures(now)
 end
 connect(Event.OnClientEvent,function(action,shooter,style,skill,value)
     if not Session.Alive or not Config.Enabled or typeof(shooter)~='Instance' or not shooter:IsA('Player') then return end
+    if shooter==Player then
+        -- A returned event is an observable acknowledgement, not proof that
+        -- the trap hitbox or animation has started. Some skills may not echo.
+        if action=='UseSkill' or action=='Hold' then
+            local now=os.clock()
+            local latest
+            for _,r in pairs(tracked) do
+                if r.fired and r.trap==skill and not r.ackAt and now-r.sentAt<=3
+                    and (not latest or r.sentAt>latest.sentAt) then latest=r end
+            end
+            if latest then
+                latest.ackAt=now
+                if Config.Debug then print('[PKA Trap timing] Trap event returned after ms',math.floor((now-latest.sentAt)*1000),skill) end
+            end
+        end
+        return
+    end
     if style~='Perfect Kick Accuracy' and not ShotSkills[skill] then return end
     if Config.Debug then print('[PKA Trap event]',action,shooter.Name,style,skill,typeof(value)) end
     if not ShotSkills[skill] then return end
@@ -370,7 +387,22 @@ connect(RunService.Heartbeat,function(dt)
             tracked[ball]=nil
             report('PKA tracking ended; waiting for next shot')
         elseif r.fired then
-            if holder(ball) then tracked[ball]=nil end
+            if holder(ball) then
+                tracked[ball]=nil
+            elseif not r.entryAt then
+                local relative=ball.Position-root.Position
+                local entry=segmentEntry(r.lastRelative,relative,r.radius)
+                if entry then
+                    r.entryAt=r.lastObservedAt+(now-r.lastObservedAt)*entry
+                    local message=string.format('Observed entry: %.0f ms after request',math.max(0,r.entryAt-r.sentAt)*1000)
+                    report(message,true)
+                    if Config.Debug then
+                        print('[PKA Trap timing]',message,'predicted ms',math.floor(r.sentEta*1000),
+                            'trap event ms',r.ackAt and math.floor((r.ackAt-r.sentAt)*1000) or 'not observed')
+                    end
+                end
+                r.lastRelative=relative;r.lastObservedAt=now
+            end
         else
             local owner=holder(ball)
             if owner then
@@ -384,6 +416,7 @@ connect(RunService.Heartbeat,function(dt)
                 local position=ball.Position
                 local distance=(position-root.Position).Magnitude
                 r.distance=distance
+                r.lastRelative=position-root.Position
                 local eta=predictEntry(r,ball,root,now)
                 if eta and eta<bestEta then best,bestEta=r,eta end
                 if distance<nearest then
@@ -403,6 +436,8 @@ connect(RunService.Heartbeat,function(dt)
             local canTrap,reason=ready(character,humanoid)
             if canTrap then
                 best.fired=true;lastRequest=now
+                best.sentAt=now;best.sentEta=bestEta;best.trap=Config.Trap
+                best.radius=Config.Radius;best.lastObservedAt=now
                 Event:FireServer(TrapActions[Config.Trap],Config.Trap)
                 local message=string.format('Trap sent: predicted ETA %.0f ms | %.1f studs',bestEta*1000,best.distance)
                 report(message,true)
