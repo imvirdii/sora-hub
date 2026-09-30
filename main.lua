@@ -560,11 +560,11 @@ local Tackle = Remotes:WaitForChild('UseKeyboardSkillRemote')
 local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
-    AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=8,
+    AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=15,
     AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
-    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 75, CanonKaiser=true,
+    SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 70, CanonKaiser=true,
 }
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
@@ -788,7 +788,7 @@ toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
 end)
 toggle(Attack,'AutoDribble','Auto Dribble','F7',nil,
     'Dodges attack animations and fast opponents closing directly into you. Early prediction can also react to a runner.')
-Attack:AddSlider('SoraDribbleRange',{Text='Auto Dribble Range',Default=8,Min=4,Max=15,Rounding=0})
+Attack:AddSlider('SoraDribbleRange',{Text='Dribble vs Tackle Range',Default=15,Min=15,Max=30,Rounding=0})
 Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDribbleRange.Value end)
 toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
 toggle(Attack,'CanonKaiser','Canon Kaiser',nil,updateCanonKaiser)
@@ -849,7 +849,7 @@ end })
 toggle(CameraGroup, 'LockFOV', 'Lock FOV', nil, function(enabled)
     if enabled then enforceFOV() elseif camera and originalFOV then camera.FieldOfView = originalFOV end
 end)
-CameraGroup:AddSlider('SoraFOV', { Text='FOV', Default=75, Min=40, Max=120, Rounding=0, Compact=false })
+CameraGroup:AddSlider('SoraFOV', { Text='FOV', Default=70, Min=70, Max=120, Rounding=0, Compact=false })
 Options.SoraFOV:OnChanged(function() State.FOV = Options.SoraFOV.Value; enforceFOV() end)
 
 local function getTeam(player)
@@ -1474,7 +1474,7 @@ local cleanupDribble=(function()
     -- Tackle ID inferred from the user's isolated tackle capture after excluding
     -- the exported idle/walk/run IDs. TakeBall is verified in PowerLocal.
     local attackAnimations={['12698810109']=0.9,['12698914098']=0.45}
-    local function react(player,now)
+    local function react(player,now,isM2)
         if not Session.Alive or not State.AutoDribble or now-lastDribble<0.35 then return false end
         if not player or player==Player or isExcepted(player) or sameTeam(player) then return false end
         if now-(lastAgainst[player] or -math.huge)<0.9 then return false end
@@ -1489,15 +1489,17 @@ local cleanupDribble=(function()
         local otherRoot=other and other:FindFirstChild('HumanoidRootPart')
         if not otherRoot then return false end
         local offset=otherRoot.Position-Root.Position
-        if offset.Magnitude>State.DribbleRange then
+        local range=isM2 and 8 or State.DribbleRange
+        if offset.Magnitude>range then
+            if isM2 then return false end
             -- Account for approach during the request's travel to the server.
-            if offset.Magnitude>State.DribbleRange+4 then return false end
+            if offset.Magnitude>range+4 then return false end
             local relative=otherRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity
             local speedSquared=relative:Dot(relative)
             local ahead=speedSquared>0.01 and math.clamp(-offset:Dot(relative)/speedSquared,0,0.2) or 0
             local lead=relative*ahead
             if lead.Magnitude>4 then lead=lead.Unit*4 end
-            if (offset+lead).Magnitude>State.DribbleRange then return false end
+            if (offset+lead).Magnitude>range then return false end
         end
         local amount=Player:GetAttribute('Dribbles')
         if type(amount)~='number' or amount<1 then return false end
@@ -1553,9 +1555,10 @@ local cleanupDribble=(function()
                     local now=os.clock()
                     local active=tackleThreats[player]
                     if active and active.track==track and now<active.expires then return end
-                    tackleThreats[player]={character=character,track=track,
+                    local isM2=id=='12698914098'
+                    tackleThreats[player]={character=character,track=track,isM2=isM2,
                         expires=now+math.min(window,(window-track.TimePosition)/math.max(math.abs(track.Speed),0.1)),
-                        fired=react(player,now)}
+                        fired=react(player,now,isM2)}
                 end)
             end
             watcher.descendant=character.DescendantAdded:Connect(attach)
@@ -1583,7 +1586,7 @@ local cleanupDribble=(function()
         for player,threat in pairs(tackleThreats) do
             if now>=threat.expires or not threat.track.IsPlaying or player.Parent~=Players or player.Character~=threat.character then
                 tackleThreats[player]=nil
-            elseif not threat.fired and react(player,now) then
+            elseif not threat.fired and react(player,now,threat.isM2) then
                 threat.fired=true
             end
         end
@@ -1595,7 +1598,8 @@ local cleanupDribble=(function()
         for player in pairs(watchers) do
             local character=player.Character
             local otherRoot=character and character:FindFirstChild('HumanoidRootPart')
-            if otherRoot and not character:FindFirstChild('Ball') and not isExcepted(player) and not sameTeam(player) then
+            local threat=tackleThreats[player]
+            if otherRoot and not (threat and threat.isM2) and not character:FindFirstChild('Ball') and not isExcepted(player) and not sameTeam(player) then
                 local offset=otherRoot.Position-Root.Position
                 local distance=offset.Magnitude
                 if distance>0.1 and distance<=State.DribbleRange+4 and math.abs(offset.Y)<5 then
