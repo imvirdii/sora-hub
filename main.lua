@@ -562,7 +562,7 @@ local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=15,
-    AutoTD = false, TDRange = 8, TDPrediction = 0.12, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
+    AutoTD = false, TDRange = 8, TDPrediction = 0.12, TDAdaptive=true, TDHold=0.4, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 85, CanonKaiser=true,
@@ -777,11 +777,15 @@ toggle(Defense, 'AutoTrap', 'Auto Trap', 'F2')
 toggle(Defense, 'AutoTackle', 'Auto Tackle', 'F3')
 toggle(Defense, 'AutoTD', 'Auto TD', 'F6', function(enabled)
     if not enabled then tdFacingUntil,tdTarget=0,nil; releaseRotation() end
-end)
+end, 'Lines up with the predicted ball path before rushing, then holds its direction. Does not skip enemy IFrames. Range is an activation setting, not a measured hitbox.')
 Defense:AddSlider('SoraTDRange',{Text='Auto TD Range',Default=8,Min=4,Max=25,Rounding=0})
 Options.SoraTDRange:OnChanged(function() State.TDRange=Options.SoraTDRange.Value end)
 Defense:AddSlider('SoraTDPrediction',{Text='Auto TD Prediction (seconds)',Default=0.12,Min=0,Max=0.25,Rounding=2})
 Options.SoraTDPrediction:OnChanged(function() State.TDPrediction=Options.SoraTDPrediction.Value end)
+toggle(Defense,'TDAdaptive','Adaptive TD Prediction',nil,nil,
+    'Adjusts prediction in small steps after accepted rushes that likely missed. Passed balls, interrupted casts and unconfirmed requests do not train it. Learning lasts this session.')
+Defense:AddSlider('SoraTDHold',{Text='TD Direction Hold (seconds)',Default=0.4,Min=0.15,Max=0.6,Rounding=2})
+Options.SoraTDHold:OnChanged(function() State.TDHold=Options.SoraTDHold.Value end)
 
 toggle(Attack, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil end)
 toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
@@ -1054,7 +1058,51 @@ local function bicycleTrap(players, now)
     end
     return false
 end
-local function tdReady(now)
+local tdReady,rushTargetValid,tdTargetPosition,startAutoTD,trackAutoTD,observeAutoTD
+do
+local attempt,leadAdjustment=nil,0
+local hits,misses,ignored=0,0,0
+local status=Defense:AddLabel('TD learning: waiting for attempts')
+Session.TDAttempts={}
+local function showStatus()
+    status:SetText(string.format('TD: %d hits / %d likely misses / %d uncertain | lead %+.0f ms',hits,misses,ignored,leadAdjustment*1000))
+end
+local function finishAttempt(result)
+    if not attempt then return end
+    local a=attempt
+    if result=='hit' then hits=hits+1
+    elseif result=='likely miss' then
+        misses=misses+1
+        -- Correct measured sideways error along target movement, not a blind
+        -- increase after every timeout. Stationary targets provide no lead signal.
+        if a.adaptive and State.TDAdaptive and a.basePrediction==State.TDPrediction
+            and a.correction and math.abs(a.correction)>0.005 then
+            leadAdjustment=math.clamp(leadAdjustment+math.clamp(a.correction*0.25,-0.015,0.015),-0.06,0.10)
+        end
+    else ignored=ignored+1 end
+    local history=Session.TDAttempts
+    if #history>=12 then table.remove(history,1) end
+    history[#history+1]={result=result,range=a.range,prediction=a.prediction,
+        lateralError=a.bestError,adjustment=leadAdjustment}
+    attempt=nil
+    showStatus()
+end
+Defense:AddButton({Text='Reset TD Learning',Func=function()
+    attempt,leadAdjustment=nil,0
+    hits,misses,ignored=0,0,0
+    table.clear(Session.TDAttempts)
+    showStatus()
+end})
+local function targetVelocity(target)
+    local velocity=target.root.AssemblyLinearVelocity
+    local ballVelocity=target.ball.AssemblyLinearVelocity
+    if (ballVelocity-velocity).Magnitude<=20 then
+        velocity=velocity*0.65+ballVelocity*0.35
+    end
+    return velocity
+end
+tdReady=function(now)
+    if attempt then return false end
     if not State.AutoTD or now-lastAutoTD<0.5 or now-lastTackle<0.5 then return false end
     if not Character or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('Ball') then return false end
     if Player:GetAttribute('UsingSkill') or Character:FindFirstChild('HoldingSkill') then return false end
@@ -1063,62 +1111,179 @@ local function tdReady(now)
     if playerState and playerState:FindFirstChild('Stun') then return false end
     local cooldowns=RS:FindFirstChild('CooldownsFolder')
     if cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..'Defensive Rush') then return false end
+    -- Read equipped slots only when otherwise ready; no polling while on cooldown.
+    local skills=Player:FindFirstChild('EquippedSkills')
+    if not skills then return false end
+    for slot,skill in pairs(skills:GetAttributes()) do
+        if slot:match('^Slot') and skill=='Defensive Rush' then return true end
+    end
+    return false
+end
+rushTargetValid=function(target,tracking)
+    if not Root or not Root.Parent or not target or target.player.Parent~=Players
+        or target.player.Character~=target.character or isExcepted(target.player)
+        or not target.ball:IsDescendantOf(target.character)
+        or target.root.Parent~=target.character or target.humanoid.Health<=0
+        or sameTeam(target.player) then return false end
+    local offset=target.ball.Position-Root.Position
+    -- Small acquisition margin permits early entry prediction. Tracking gets a
+    -- separate exit margin so crossing the slider boundary does not drop aim.
+    local margin=tracking and 4 or math.min(3,State.TDRange*0.25)
+    if offset.Magnitude>State.TDRange+margin then return false end
+    -- Conservative vertical guard, NOT a claim about the server hitbox height.
+    if math.abs(offset.Y)>6 then return false end
     return true
 end
-local function rushTargetValid(target)
-    return target.player.Character==target.character
-        and not isExcepted(target.player)
-        and target.ball:IsDescendantOf(target.character)
-        and target.root.Parent==target.character
-        and target.humanoid.Health>0
-        and not sameTeam(target.player)
-        and (target.ball.Position-Root.Position).Magnitude<=State.TDRange
-end
-local function tdTargetPosition(target,remainingTime)
+tdTargetPosition=function(target,remainingTime)
     local offset=target.ball.Position-Root.Position
     local flatDistance=Vector3.new(offset.X,0,offset.Z).Magnitude
-    -- Reduce lead at close range and as the short tracking window expires.
-    local prediction=State.TDPrediction*math.clamp(flatDistance/8,0,1)
+    -- A carried ball can have stale/zero velocity. Use its velocity only when
+    -- it agrees with the holder; never extrapolate an apparent launch spike.
+    local velocity=targetVelocity(target)
+    local relative=velocity-Root.AssemblyLinearVelocity
+    local prediction=math.clamp(State.TDPrediction+(State.TDAdaptive and leadAdjustment or 0),0,0.25)
+        *math.clamp(flatDistance/8,0,1)
     if remainingTime then prediction=math.min(prediction,math.max(0,remainingTime)) end
-    local velocity=target.root.AssemblyLinearVelocity
-    local lead=Vector3.new(velocity.X,0,velocity.Z)*prediction
-    local maxLead=math.min(3,flatDistance*0.3)
+    local futureOffset=offset+relative*prediction
+    local currentDistance,futureDistance=offset.Magnitude,futureOffset.Magnitude
+    local closing=currentDistance>0.001 and -offset:Dot(relative)/currentDistance or 0
+    -- Stationary and close retreating holders remain valid. Only reject
+    -- retreating edge targets projected to escape the configured range.
+    local eligible=(currentDistance<=State.TDRange or (closing>0 and futureDistance<=State.TDRange))
+        and not (closing<0 and currentDistance>State.TDRange*0.7 and futureDistance>State.TDRange)
+        and math.abs(futureOffset.Y)<=6
+    local lead=Vector3.new(relative.X,0,relative.Z)*prediction
+    local maxLead=math.min(4,flatDistance*0.4)
     if lead.Magnitude>maxLead then lead=lead.Unit*maxLead end
     local predicted=target.ball.Position+lead
-    return Vector3.new(predicted.X,Root.Position.Y,predicted.Z)
+    -- Rank by expected proximity; do not mistake 'approaching' for a required
+    -- condition when a stationary or slower retreating holder is reachable.
+    local direction=predicted-Root.Position
+    direction=Vector3.new(direction.X,0,direction.Z)
+    if direction.Magnitude<0.001 then return predicted,math.huge,false,prediction end
+    direction=direction.Unit
+    -- A ray is only an aiming lane, not an invented hitbox width. Favor holders
+    -- whose projected position lies along it, with a small cost for large turns.
+    local flatFuture=Vector3.new(futureOffset.X,0,futureOffset.Z)
+    local along=flatFuture:Dot(direction)
+    local lateral=(flatFuture-direction*along).Magnitude
+    local turn=1-math.clamp(Root.CFrame.LookVector:Dot(direction),-1,1)
+    local score=futureDistance+currentDistance*0.15+lateral*0.5+turn*0.5
+    return Vector3.new(predicted.X,Root.Position.Y,predicted.Z),score,eligible and along>0,prediction
 end
-local function startAutoTD(target,now)
+startAutoTD=function(target,now)
+    if tdTarget then return false end
     if not tdReady(now) or not rushTargetValid(target) then return false end
-    local flatTarget=tdTargetPosition(target)
+    local flatTarget,_,eligible=tdTargetPosition(target)
+    if not eligible then return false end
     if (flatTarget-Root.Position).Magnitude<0.001 then return false end
     lockRotation()
     Root.CFrame=CFrame.new(Root.Position,flatTarget)
-    tdTarget,tdFacingUntil=target,now+0.2
-    lastAutoTD=now
-    Event:FireServer('UseSkill','Defensive Rush')
+    -- Prepare direction now; require a later frame with a stable bearing before
+    -- requesting the skill. The timeout prevents chasing an unalignable target.
+    target.preparedAt,target.direction=now,nil
+    tdTarget,tdFacingUntil=target,now+0.15
     return true
 end
-local function trackAutoTD(now)
+trackAutoTD=function(now)
     if not tdTarget then return false end
     if not State.AutoTD or now>=tdFacingUntil or not Root or not Root.Parent
         or not Humanoid or Humanoid.Health<=0 or not Character
-        or Character:FindFirstChild('Ball') or not rushTargetValid(tdTarget) then
+        or Character:FindFirstChild('Ball') or not rushTargetValid(tdTarget,true)
+        or workspace:GetAttribute('PlayersAllowedToUseSkills')==false
+        or (Player:FindFirstChild('PlayerStateFolder') and Player.PlayerStateFolder:FindFirstChild('Stun')) then
         tdTarget=nil
         releaseRotation()
         return false
     end
-    -- Recompute from the live holder and ball instead of holding a stale point.
-    local position=tdTargetPosition(tdTarget,tdFacingUntil-now)
-    if (position-Root.Position).Magnitude<0.001 then return true end
+    if tdTarget.direction then
+        -- Fix the bearing after firing: do not sweep the attack or redirect
+        -- the outgoing ball while continuing to chase a moving holder.
+        lockRotation()
+        Root.CFrame=CFrame.new(Root.Position,Root.Position+tdTarget.direction)
+        return true
+    end
+    local position,_,eligible,prediction=tdTargetPosition(tdTarget)
+    if not eligible or not tdReady(now) then
+        tdTarget=nil;releaseRotation();return false
+    end
+    local delta=position-Root.Position
+    if delta.Magnitude<0.001 then tdTarget=nil;releaseRotation();return false end
+    local direction=delta.Unit
+    local aligned=Root.CFrame.LookVector:Dot(direction)>=0.985
     lockRotation()
     Root.CFrame=CFrame.new(Root.Position,position)
+    if now-tdTarget.preparedAt>=1/60 and aligned then
+        tdTarget.direction=direction
+        tdFacingUntil=now+State.TDHold
+        lastAutoTD=now
+        attempt={target=tdTarget,character=Character,sent=now,accepted=false,
+            basePrediction=State.TDPrediction,prediction=prediction,adaptive=State.TDAdaptive,
+            direction=direction,range=State.TDRange,hold=State.TDHold,bestError=math.huge}
+        Event:FireServer('UseSkill','Defensive Rush')
+    end
     return true
+end
+observeAutoTD=function(now)
+    local a=attempt
+    if not a then return end
+    local t=a.target
+    local ps=Player:FindFirstChild('PlayerStateFolder')
+    if not Session.Alive or not State.AutoTD or Character~=a.character or not Root or not Root.Parent
+        or not Humanoid or Humanoid.Health<=0 or (ps and ps:FindFirstChild('Stun'))
+        or workspace:GetAttribute('PlayersAllowedToUseSkills')==false then
+        finishAttempt('interrupted');return
+    end
+    local cd=RS:FindFirstChild('CooldownsFolder')
+    if cd and cd:FindFirstChild(tostring(Player.UserId)..'Defensive Rush') then a.accepted=true end
+    if Character:FindFirstChild('Ball') then a.uncertain=true end
+    if t.player.Character~=t.character or t.player.Parent~=Players or t.humanoid.Health<=0
+        or isExcepted(t.player) or sameTeam(t.player) or not t.ball:IsDescendantOf(t.character) then
+        -- Keep the attempt for a delayed Kick acknowledgement, but never train
+        -- a miss from a pass, despawn, or loss of the original ball holder.
+        a.uncertain=true
+    elseif now-a.sent<=a.hold and not a.uncertain then
+        local offset=t.ball.Position-Root.Position
+        offset=Vector3.new(offset.X,0,offset.Z)
+        local along=offset:Dot(a.direction)
+        local cross=offset-a.direction*along
+        local error=cross.Magnitude
+        if along>0 and along<=a.range+4 and error<a.bestError then
+            a.bestError=error
+            local velocity=targetVelocity(t)-Root.AssemblyLinearVelocity
+            velocity=Vector3.new(velocity.X,0,velocity.Z)
+            local sideways=velocity-a.direction*velocity:Dot(a.direction)
+            local speedSquared=sideways:Dot(sideways)
+            a.correction=speedSquared>=16 and cross:Dot(sideways)/speedSquared or nil
+        end
+    end
+    -- Observation timeout is deliberately separate from direction hold and is
+    -- not treated as a measurement of the server hitbox lifetime.
+    if now-a.sent>=1.25 then
+        finishAttempt(a.accepted and not a.uncertain and a.bestError<math.huge and 'likely miss' or 'uncertain')
+    end
+end
+connect(Event.OnClientEvent,function(action,player,style,skill,ball)
+    local a=attempt
+    if not a or not Session.Alive or not State.AutoTD or player~=Player then return end
+    if style~='Total Defense' or skill~='Defensive Rush' then
+        if action=='UseSkill' or action=='Hold' then a.uncertain=true end
+        return
+    end
+    if action=='UseSkill' then a.accepted=true
+    elseif action=='Kick' and typeof(ball)=='Instance'
+        and (ball==a.target.ball or a.target.ball:IsDescendantOf(ball)) then
+        finishAttempt('hit')
+        tdTarget,tdFacingUntil=nil,0
+        releaseRotation()
+    end
+end)
 end
 local function defenseStep(now)
     local players=Players:GetPlayers()
     if (State.AutoTrap or State.AutoTD) and bicycleTrap(players,now) then return end
     if not Root or not Root.Parent or not Character then return end
-    local canRush=tdReady(now)
+    local canRush=not tdTarget and tdReady(now)
     local myTeam=canRush and getTeam(Player) or nil
     local rushTarget,rushDistance=nil,math.huge
     local tackleTarget,tackleDistance=nil,math.huge
@@ -1131,7 +1296,7 @@ local function defenseStep(now)
             if root and ball and ball:IsA('BasePart') then
                 local holderDistance=(root.Position-Root.Position).Magnitude
                 -- Keep Auto M2's original 23-stud activation; animate only within 8.
-                if State.AutoM2 and not Character:FindFirstChild('Ball') and now-lastM2>=0.1 and holderDistance<=23 then
+                if State.AutoM2 and not tdTarget and not Character:FindFirstChild('Ball') and now-lastM2>=0.1 and holderDistance<=23 then
                     lastM2=now
                     if holderDistance<=8 then playTakeBallAnimation(now) end
                     Punch:FireServer('TakeBall',ball)
@@ -1141,12 +1306,16 @@ local function defenseStep(now)
                     local humanoid=character:FindFirstChildOfClass('Humanoid')
                     local distance=(ball.Position-Root.Position).Magnitude
                     if (not myTeam or theirTeam~=myTeam) and humanoid and humanoid.Health>0
-                        and distance<=State.TDRange and distance<rushDistance then
-                        rushDistance=distance
-                        rushTarget={player=player,character=character,root=root,humanoid=humanoid,ball=ball}
+                        and distance<=State.TDRange+math.min(3,State.TDRange*0.25)
+                        and math.abs(ball.Position.Y-Root.Position.Y)<=6 then
+                        local candidate={player=player,character=character,root=root,humanoid=humanoid,ball=ball}
+                        local _,score,eligible=tdTargetPosition(candidate)
+                        if eligible and score<rushDistance then
+                            rushDistance,rushTarget=score,candidate
+                        end
                     end
                 end
-                if State.AutoTackle and now-lastTackle>=0.5 and now-lastAutoTD>=0.5
+                if State.AutoTackle and not tdTarget and now-lastTackle>=0.5 and now-lastAutoTD>=0.5
                     and not sameTeam(player) and not iframes(character) then
                     local predicted=ball.Position+ball.AssemblyLinearVelocity*0.12
                     local distance=(Root.Position-predicted).Magnitude
@@ -1451,6 +1620,7 @@ connect(RunService.Heartbeat, function(dt)
     elapsed = elapsed+dt
     if elapsed >= 0.03 then
         elapsed = 0
+        observeAutoTD(now)
         if State.AutoTrap or State.AutoTackle or State.AutoM2 or State.AutoTD then defenseStep(os.clock()) end
         if pendingPlayer and os.clock()-pendingAt > 5 then pendingPlayer = nil end
     end
