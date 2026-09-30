@@ -786,7 +786,8 @@ toggle(Attack, 'TDImmunity', 'TD Immunity', 'F4', function() pendingPlayer = nil
 toggle(Defense, 'AutoM2', 'Auto M2', 'F5', function(enabled)
     if not enabled then clearTakeBallAnimation() end
 end)
-toggle(Attack,'AutoDribble','Auto Dribble','F7')
+toggle(Attack,'AutoDribble','Auto Dribble','F7',nil,
+    'Dodges attack animations and fast opponents closing directly into you. Early prediction can also react to a runner.')
 Attack:AddSlider('SoraDribbleRange',{Text='Auto Dribble Range',Default=8,Min=4,Max=15,Rounding=0})
 Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDribbleRange.Value end)
 toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function() bikeArmed = false end)
@@ -1469,12 +1470,14 @@ local cleanupDribble=(function()
     local lastDribble=-math.huge
     local tackleThreats={}
     local watchers={}
+    local lastAgainst={}
     -- Tackle ID inferred from the user's isolated tackle capture after excluding
     -- the exported idle/walk/run IDs. TakeBall is verified in PowerLocal.
     local attackAnimations={['12698810109']=0.9,['12698914098']=0.45}
     local function react(player,now)
         if not Session.Alive or not State.AutoDribble or now-lastDribble<0.35 then return false end
         if not player or player==Player or isExcepted(player) or sameTeam(player) then return false end
+        if now-(lastAgainst[player] or -math.huge)<0.9 then return false end
         if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent
             or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('CantDribble') or iframes(Character) then return false end
         if workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false end
@@ -1487,13 +1490,13 @@ local cleanupDribble=(function()
         if not otherRoot then return false end
         local offset=otherRoot.Position-Root.Position
         if offset.Magnitude>State.DribbleRange then
-            -- Anticipate entry by at most 0.12 s / 3 studs, only for a known attack.
-            if offset.Magnitude>State.DribbleRange+3 then return false end
+            -- Account for approach during the request's travel to the server.
+            if offset.Magnitude>State.DribbleRange+4 then return false end
             local relative=otherRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity
             local speedSquared=relative:Dot(relative)
-            local ahead=speedSquared>0.01 and math.clamp(-offset:Dot(relative)/speedSquared,0,0.12) or 0
+            local ahead=speedSquared>0.01 and math.clamp(-offset:Dot(relative)/speedSquared,0,0.2) or 0
             local lead=relative*ahead
-            if lead.Magnitude>3 then lead=lead.Unit*3 end
+            if lead.Magnitude>4 then lead=lead.Unit*4 end
             if (offset+lead).Magnitude>State.DribbleRange then return false end
         end
         local amount=Player:GetAttribute('Dribbles')
@@ -1501,16 +1504,23 @@ local cleanupDribble=(function()
         local away=Root.Position-otherRoot.Position
         local choices={Forward=Root.CFrame.LookVector,Back=-Root.CFrame.LookVector,Right=Root.CFrame.RightVector,Left=-Root.CFrame.RightVector}
         local direction,score=nil,-math.huge
+        local incoming=otherRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity
+        incoming=Vector3.new(incoming.X,0,incoming.Z)
         local costs={Forward=1,Back=1,Right=1,Left=1}
         for _,child in ipairs(Character:GetChildren()) do
             if child.Name=='DribblesIncrease' and child:IsA('StringValue') and costs[child.Value] then costs[child.Value]=costs[child.Value]+1 end
         end
         for name,vector in pairs(choices) do
             local value=away:Dot(vector)
+            if incoming.Magnitude>12 and away:Dot(incoming)>0 then
+                -- Retreating straight backwards stays in a head-on tackle's path.
+                value=value*0.2+(1-math.abs(vector:Dot(incoming.Unit)))*math.max(away.Magnitude,4)
+            end
             if amount>=costs[name] and value>score then direction,score=name,value end
         end
         if not direction then return false end
         lastDribble=now
+        lastAgainst[player]=now
         Tackle:FireServer('Dribble',direction)
         return true
     end
@@ -1521,6 +1531,7 @@ local cleanupDribble=(function()
             watchers[player]=nil
         end
         tackleThreats[player]=nil
+        lastAgainst[player]=nil
     end
     local function watch(player)
         if player==Player or watchers[player] then return end
@@ -1530,6 +1541,7 @@ local cleanupDribble=(function()
             if watcher.animation then watcher.animation:Disconnect();watcher.animation=nil end
             if watcher.descendant then watcher.descendant:Disconnect();watcher.descendant=nil end
             tackleThreats[player]=nil
+            lastAgainst[player]=nil
             local function attach(animator)
                 if watcher.animation or not animator:IsA('Animator') or not animator.Parent:IsA('Humanoid') then return end
                 watcher.animation=animator.AnimationPlayed:Connect(function(track)
@@ -1575,10 +1587,35 @@ local cleanupDribble=(function()
                 threat.fired=true
             end
         end
+        -- Replicated animations can arrive after contact. Check only imminent,
+        -- direct approaches while we possess the ball; never treat this as a
+        -- confirmed tackle or depend on late cooldown replication.
+        if now-lastDribble<0.35 or not Character or not Character:FindFirstChild('Ball')
+            or not Root or not Root.Parent then return end
+        for player in pairs(watchers) do
+            local character=player.Character
+            local otherRoot=character and character:FindFirstChild('HumanoidRootPart')
+            if otherRoot and not character:FindFirstChild('Ball') and not isExcepted(player) and not sameTeam(player) then
+                local offset=otherRoot.Position-Root.Position
+                local distance=offset.Magnitude
+                if distance>0.1 and distance<=State.DribbleRange+4 and math.abs(offset.Y)<5 then
+                    local relative=otherRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity
+                    local closing=-relative:Dot(offset.Unit)
+                    local advancing=-otherRoot.AssemblyLinearVelocity:Dot(offset.Unit)
+                    local facing=otherRoot.CFrame.LookVector:Dot(-offset.Unit)
+                    if closing>18 and advancing>12 and facing>0.5 and math.max(0,distance-4)/closing<=0.28 then
+                        local speedSquared=relative:Dot(relative)
+                        local nearestAt=math.clamp(-offset:Dot(relative)/math.max(speedSquared,0.01),0,0.4)
+                        if (offset+relative*nearestAt).Magnitude<=3.5 and react(player,now) then break end
+                    end
+                end
+            end
+        end
     end)
     return function()
         for player in pairs(watchers) do unwatch(player) end
         table.clear(tackleThreats)
+        table.clear(lastAgainst)
     end
 end)()
 
