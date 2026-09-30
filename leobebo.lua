@@ -1,4 +1,4 @@
--- LeoBebo | Auto Bike and camera shake only.
+-- LeoBebo | Auto Bike and camera controls.
 -- Select the Impact Bicycle slot, then left-click. F1 toggles Auto Bike.
 -- End hides/shows this panel without disabling Auto Bike.
 local Players = game:GetService("Players")
@@ -23,6 +23,43 @@ local function restoreCameraShake()
     shaker, originalShake, noShake = nil, nil, nil
 end
 
+
+-- The camera button locks FOV until this hub is unloaded.
+local fovLocked = false
+local fovCamera, originalFOV, fovConnection
+local function releaseFOVCamera()
+    if fovConnection then fovConnection:Disconnect() end
+    fovConnection = nil
+    if fovCamera and originalFOV then
+        fovCamera.FieldOfView = originalFOV
+    end
+    fovCamera, originalFOV = nil, nil
+end
+local function enforceFOV()
+    if Alive and fovLocked and fovCamera and fovCamera.FieldOfView ~= 85 then
+        fovCamera.FieldOfView = 85
+    end
+end
+local function bindFOVCamera()
+    releaseFOVCamera()
+    if not Alive or not fovLocked then return end
+    fovCamera = workspace.CurrentCamera
+    if not fovCamera then return end
+    originalFOV = fovCamera.FieldOfView
+    fovConnection = fovCamera:GetPropertyChangedSignal("FieldOfView"):Connect(enforceFOV)
+    enforceFOV()
+end
+connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
+    if fovLocked then bindFOVCamera() end
+end)
+local function lockFOV()
+    if not fovLocked then
+        fovLocked = true
+        bindFOVCamera()
+    else
+        enforceFOV()
+    end
+end
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LeoBeboHub"
@@ -57,23 +94,25 @@ local AutoBikeButton = CreateStatus("AutoBikeButton", 0, "")
 local CameraShakeButton = CreateStatus("CameraShakeButton", 1, "REMOVE CAMERA SHAKE")
 CameraShakeButton.TextColor3 = Color3.fromRGB(235, 235, 235)
 connect(CameraShakeButton.Activated, function()
+    if not Alive then return end
+    lockFOV()
     if shaker then return end
     local modules = ReplicatedStorage:FindFirstChild("Modules")
     local module = modules and modules:FindFirstChild("CameraShaker")
     if not module then
-        CameraShakeButton.Text = "SHAKE MODULE NOT FOUND"
+        CameraShakeButton.Text = "FOV 85 | SHAKE NOT FOUND"
         return
     end
     local loaded, value = pcall(require, module)
     if not loaded or type(value) ~= "table" or type(value.Update) ~= "function" then
-        CameraShakeButton.Text = "SHAKE MODULE UNAVAILABLE"
+        CameraShakeButton.Text = "FOV 85 | SHAKE UNAVAILABLE"
         return
     end
     if not Alive then return end
     shaker, originalShake = value, value.Update
     noShake = function() return CFrame.new() end
     shaker.Update = noShake
-    CameraShakeButton.Text = "CAMERA SHAKE: REMOVED"
+    CameraShakeButton.Text = "NO SHAKE | FOV: 85"
     CameraShakeButton.TextColor3 = Color3.fromRGB(85, 255, 85)
 end)
 
@@ -165,6 +204,8 @@ connect(ScreenGui.Destroying, function()
     Alive = false
     BikeArmed = false
     restoreCameraShake()
+    fovLocked = false
+    releaseFOVCamera()
     for _, connection in ipairs(Connections) do connection:Disconnect() end
     table.clear(Connections)
     _G.LeoBeboHubRunning = nil
