@@ -9,7 +9,7 @@ local Player=Players.LocalPlayer
 local Event=RS:WaitForChild('Remotes'):WaitForChild('TranciverRemote')
 local Env=type(getgenv)=='function' and getgenv() or _G
 if Env.PKATrapTest then Env.PKATrapTest.Unload() end
-local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.22,
+local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.35,
     Interval=1/60,Horizon=0.65,PathStep=0.02,MaxAcceleration=250,
     MaxAge=8,MaxTracked=4,RequestGap=0.5,IgnoreTeammates=true,Debug=true}
 local Exceptions={TheNextNagi=true,LeoTheDominican=true}
@@ -190,12 +190,26 @@ local function predictEntry(record,ball,root,now)
         local velocity=record.velocity+acceleration*(0.5*(record.previousDt or 0))
         local age=math.min(math.max(now-record.at,0),0.08)
         position=position+velocity*age+acceleration*(0.5*age*age)
-        return arrival(position,velocity+acceleration*age,acceleration,root)
+        velocity=velocity+acceleration*age
+        local curved=arrival(position,velocity,acceleration,root)
+        -- A noisy acceleration estimate must not veto an already approaching
+        -- ball. Check its current straight path against the same trigger sphere.
+        local relative=position-root.Position
+        local relativeVelocity=velocity-root.AssemblyLinearVelocity
+        local fraction=segmentEntry(relative,relative+relativeVelocity*Config.Horizon,Config.Radius)
+        local direct=fraction and fraction*Config.Horizon
+        if direct and (not curved or direct<curved) then
+            record.prediction='approach'
+            return direct
+        end
+        record.prediction='curve'
+        return curved
     end
     -- Physics velocity can be available on the first released frame, before
     -- there are enough position updates. Position-derived motion takes over.
     local velocity=ball.AssemblyLinearVelocity
     if velocity.Magnitude>2 and (not record.previousVelocity) then
+        record.prediction='release velocity'
         return arrival(position,velocity,Vector3.zero,root)
     end
 end
@@ -230,7 +244,7 @@ trapButton=button('Trap: '..Config.Trap,10,68,290,function()
     choice=choice%#choices+1;Config.Trap=choices[choice];trapButton.Text='Trap: '..Config.Trap
 end)
 local radiusText=label('Trigger radius: 12 studs',103)
-local leadText=label('Activation lead: 220 ms',160)
+local leadText=label('Activation lead: 350 ms',160)
 button('- radius',10,129,140,function()
     Config.Radius=math.max(3,Config.Radius-1);radiusText.Text='Trigger radius: '..Config.Radius..' studs'
 end)
@@ -369,6 +383,7 @@ connect(RunService.Heartbeat,function(dt)
                 r.released=true
                 local position=ball.Position
                 local distance=(position-root.Position).Magnitude
+                r.distance=distance
                 local eta=predictEntry(r,ball,root,now)
                 if eta and eta<bestEta then best,bestEta=r,eta end
                 if distance<nearest then
@@ -389,7 +404,9 @@ connect(RunService.Heartbeat,function(dt)
             if canTrap then
                 best.fired=true;lastRequest=now
                 Event:FireServer(TrapActions[Config.Trap],Config.Trap)
-                report('Trap requested: '..Config.Trap,true)
+                local message=string.format('Trap sent: predicted ETA %.0f ms | %.1f studs',bestEta*1000,best.distance)
+                report(message,true)
+                if Config.Debug then print('[PKA Trap timing]',message,best.prediction or 'close range',Config.Trap) end
             else report('Waiting: '..reason) end
         end
     elseif trackingMessage then
