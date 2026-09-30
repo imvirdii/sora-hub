@@ -5,6 +5,9 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
+
+-- Reserved for opponent-targeted features; Auto Bike/camera controls do not target players.
+local Exceptions = {thenextnagi = true, leothedominican = true}
 local Transceiver = ReplicatedStorage.Remotes.TranciverRemote
 if _G.LeoBeboHubRunning then return end
 _G.LeoBeboHubRunning = true
