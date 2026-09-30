@@ -1377,12 +1377,19 @@ do
         local now=os.clock()
         if now>=nextRefresh then refreshGoals(now) end
         local frame=camera.CFrame
+        local horizontal=Vector3.new(frame.LookVector.X,0,frame.LookVector.Z)
+        if horizontal.Magnitude<0.001 then
+            local facing=Root.CFrame.LookVector
+            horizontal=Vector3.new(facing.X,0,facing.Z)
+        end
+        if horizontal.Magnitude<0.001 then return stop() end
+        horizontal=horizontal.Unit
         local goal,hit,tBest=nil,nil,math.huge
         for _,g in ipairs(goals) do
             local mouth=g.mouth
             if mouth.Parent and g.bar.Parent and math.abs(mouth.Position.Y-Root.Position.Y)<45 then
                 local origin=mouth.CFrame:PointToObjectSpace(frame.Position)
-                local look=mouth.CFrame:VectorToObjectSpace(frame.LookVector)
+                local look=mouth.CFrame:VectorToObjectSpace(horizontal)
                 if math.abs(look.X)>0.001 then
                     local t=-origin.X/look.X
                     if t>0 and t<tBest and t<2000 then
@@ -1406,21 +1413,20 @@ do
         end
         local cf,size=bar.CFrame,bar.Size
         local halfHeight=(math.abs(cf.RightVector.Y)*size.X+math.abs(cf.UpVector.Y)*size.Y+math.abs(cf.LookVector.Y)*size.Z)*0.5
-        local ceiling=bar.Position.Y-halfHeight-margin
+        -- Keep the camera's maximum aim visibly below the underside of the bar.
+        local ceiling=bar.Position.Y-halfHeight-math.max(2,margin)
         local width=math.max(0,mouth.Size.Z*0.5-margin)
         local corner=mouth.CFrame:PointToWorldSpace(Vector3.new(0,0,side*width))
         local target=Vector3.new(corner.X,Root.Position.Y,corner.Z)
         local delta=target-Root.Position
         if delta.Magnitude<0.1 then return stop() end
         local shotFlat=Vector3.new(corner.X-origin.X,0,corner.Z-origin.Z).Magnitude
-        local horizontal=Vector3.new(frame.LookVector.X,0,frame.LookVector.Z)
-        if horizontal.Magnitude<0.001 then return stop() end
         -- Cap both the shot-origin angle and the camera ray at the crossbar.
         -- This bounds the aim direction, not server-authored curve/lift physics.
         local maxPitch=math.atan2(ceiling-origin.Y,math.max(shotFlat,0.1))
-        local cameraFlat=tBest*horizontal.Magnitude
+        local cameraFlat=tBest
         maxPitch=math.min(maxPitch,math.atan2(ceiling-frame.Position.Y,math.max(cameraFlat,0.1)))
-        local pitch=math.atan2(frame.LookVector.Y,horizontal.Magnitude)
+        local pitch=math.asin(math.clamp(frame.LookVector.Y,-1,1))
         if pitch>maxPitch then
             local direction=horizontal.Unit*math.cos(maxPitch)+Vector3.new(0,math.sin(maxPitch),0)
             camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+direction)
