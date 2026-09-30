@@ -4,6 +4,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- Usernames excluded from opponent-targeted automation (case-insensitive).
+local Exceptions = {thenextnagi = true, leothedominican = true}
+local function isExcepted(player)
+    return player ~= nil and Exceptions[string.lower(player.Name)] == true
+end
+
 local Transceiver =
     ReplicatedStorage.Remotes.TranciverRemote
 
@@ -192,7 +198,7 @@ connect(Transceiver.OnClientEvent, function(
         return
     end
 
-    if typeof(player) ~= "Instance" or not player:IsA("Player") or player == LocalPlayer then
+    if typeof(player) ~= "Instance" or not player:IsA("Player") or player == LocalPlayer or isExcepted(player) then
         return
     end
 
@@ -303,7 +309,7 @@ connect(Transceiver.OnClientEvent, function(
         return
     end
 
-    if typeof(player) ~= "Instance" or not player:IsA("Player") or player == LocalPlayer then
+    if typeof(player) ~= "Instance" or not player:IsA("Player") or player == LocalPlayer or isExcepted(player) then
         return
     end
 
@@ -325,10 +331,6 @@ end)
 --------------------------------------------------
 --// AUTO TD: opponent selection, predictive aim and measured adaptation
 --------------------------------------------------
-local Exceptions = {TheNextNagi = true, LeoTheDominican = true}
-local function isExcepted(player)
-    return player ~= nil and Exceptions[player.Name] == true
-end
 local function getTeam(player)
     local teams = RS:FindFirstChild('Teams')
     if teams then
