@@ -72,6 +72,7 @@ Frame.Position = UDim2.new(0, 15, 0, 15)
 Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 Frame.BorderSizePixel = 0
 Frame.Parent = ScreenGui
+local GuiVisible = true
 local Corner = Instance.new("UICorner")
 Corner.CornerRadius = UDim.new(0, 8)
 Corner.Parent = Frame
@@ -172,6 +173,13 @@ else
 end
 connect(LocalPlayer.CharacterAdded, function() BikeArmed = false end)
 connect(UserInputService.InputBegan, function(input, gameProcessed)
+    -- End always controls the whole display, even when Roblox consumes the key.
+    if input.KeyCode == Enum.KeyCode.End then
+        GuiVisible = not GuiVisible
+        Frame.Visible = GuiVisible
+        ScreenGui.Enabled = GuiVisible
+        return
+    end
     if UserInputService:GetFocusedTextBox() then return end
     if AutoBikeEnabled and BikeArmed and input.UserInputType == Enum.UserInputType.MouseButton1 then
         -- UI clicks must not consume an armed bike or send a shot.
@@ -187,9 +195,7 @@ connect(UserInputService.InputBegan, function(input, gameProcessed)
         return
     end
     if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.End then
-        ScreenGui.Enabled = not ScreenGui.Enabled
-    elseif input.KeyCode == Enum.KeyCode.F1 then ToggleBike()
+    if input.KeyCode == Enum.KeyCode.F1 then ToggleBike()
     elseif AutoBikeEnabled and ImpactKey and input.KeyCode == ImpactKey then BikeArmed = true
     elseif SlotKeys.SlotOne == input.KeyCode or input.KeyCode == Enum.KeyCode.Two
         or input.KeyCode == Enum.KeyCode.Three or input.KeyCode == Enum.KeyCode.Four
