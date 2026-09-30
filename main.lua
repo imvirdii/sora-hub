@@ -1461,19 +1461,20 @@ end
 -- Original PowerfulShot priority and remote sequences, after a successful aim.
 local shootAfterAimStep
 do
-    local possession,startedAt,nextCheck,sent=nil,nil,0,false
-    local motionStableAt
-    local function motionReady(now)
-        if not Root or not Root.Parent then motionStableAt=nil;return false end
+    local possession,nextCheck,sent=nil,0,false
+    local cleanMotionFrames=0
+    local function motionReady()
+        if not Root or not Root.Parent then cleanMotionFrames=0;return false end
         local velocity=Root.AssemblyLinearVelocity
         local fast=Vector3.new(velocity.X,0,velocity.Z).Magnitude>45
         local body=Root:FindFirstChildOfClass('BodyVelocity')
         local linear=Root:FindFirstChildOfClass('LinearVelocity')
         local driven=(body and body.Velocity.Magnitude>2 and body.MaxForce.Magnitude>0)
             or (linear and linear.Enabled)
-        if fast or driven then motionStableAt=nil;return false end
-        if not motionStableAt then motionStableAt=now end
-        return now-motionStableAt>=0.10
+        if fast or driven then cleanMotionFrames=0;return false end
+        -- Two clean render frames replace the fixed post-rush delay.
+        cleanMotionFrames=math.min(cleanMotionFrames+1,2)
+        return cleanMotionFrames==2
     end
     local function readyShot()
         local equipped=Player:FindFirstChild('EquippedSkills')
@@ -1511,23 +1512,22 @@ do
     shootAfterAimStep=function(aimed)
         local ball=Character and Character:FindFirstChild('Ball')
         if not Session.Alive or not State.ShootAfterAimed or not State.AutoAim or not State.AimAllowed or not ball then
-            possession,startedAt,nextCheck,sent=nil,nil,0,false
-            motionStableAt=nil
+            possession,nextCheck,sent=nil,0,false
+            cleanMotionFrames=0
             return
         end
-        if ball~=possession then possession,startedAt,nextCheck,sent=ball,nil,0,false;motionStableAt=nil end
-        local now=os.clock()
-        if not motionReady(now) then startedAt=nil;return end
-        if not aimed then startedAt=nil;return end
+        if ball~=possession then possession,nextCheck,sent=ball,0,false;cleanMotionFrames=0 end
         if sent or game.PlaceId==12467817668 then return end
-        if not startedAt then startedAt=now;return end
-        -- Bound the original readiness wait without yielding the render callback.
-        if now-startedAt>1.5 or now<nextCheck then return end
-        nextCheck=now+0.1
+        local movementReady=motionReady()
+        if not movementReady or not aimed then nextCheck=0;return end
         if not Humanoid or Humanoid.Health<=0 or Player:GetAttribute('UsingSkill')
             or workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return end
         local state=Player:FindFirstChild('PlayerStateFolder')
         if state and (state:FindFirstChild('Stun') or state:FindFirstChild('CantPunch')) then return end
+        local now=os.clock()
+        if now<nextCheck then return end
+        -- Only the hotbar scan is throttled; movement/facing are checked each frame.
+        nextCheck=now+0.03
         local skill=readyShot()
         if not skill then return end
         sent=true
