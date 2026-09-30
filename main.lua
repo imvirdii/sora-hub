@@ -939,7 +939,7 @@ end)
 -- Preserve the original sequence: slot number, then the next LMB, lob first.
 -- One permanent input listener avoids stacking callbacks on repeated slot presses.
 local impactKey
-local bikeArmedAt,lastBikeRequest=0,-math.huge
+local lastBikeRequest=-math.huge
 local slotKeys = {
     SlotOne=Enum.KeyCode.One, SlotTwo=Enum.KeyCode.Two, SlotThree=Enum.KeyCode.Three,
     SlotFour=Enum.KeyCode.Four, SlotFive=Enum.KeyCode.Five, SlotSix=Enum.KeyCode.Six,
@@ -989,18 +989,17 @@ local function bikeInput(input, processed)
         local currentRoot = currentCharacter and currentCharacter:FindFirstChild('HumanoidRootPart')
         if not ball or not currentRoot then return end
         local now=os.clock()
-        if now-bikeArmedAt>3 or now-lastBikeRequest<0.25 then return end
+        if now-lastBikeRequest<0.25 then return end
         local humanoid=currentCharacter:FindFirstChildOfClass('Humanoid')
         local state=Player:FindFirstChild('PlayerStateFolder')
-        local cooldowns=RS:FindFirstChild('CooldownsFolder')
+        -- The game's own LMB listener can set UsingSkill/CantPunch/cooldown
+        -- before this callback runs. Those snapshots must not veto this click.
         local blocked=not humanoid or humanoid.Health<=0
-            or Player:GetAttribute('UsingSkill')
             or workspace:GetAttribute('PlayersAllowedToUseSkills')==false
-            or (state and (state:FindFirstChild('Stun') or state:FindFirstChild('CantPunch')))
-            or (cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..'Impact Bicycle'))
+            or (state and state:FindFirstChild('Stun'))
         if blocked then
             bikeAimUntil=0
-            Library:Notify('Auto Bike is not ready. Select its slot and click again when the skill lock/cooldown ends.',3)
+            Library:Notify('Auto Bike blocked: character unavailable, stunned, or skills disabled.',3)
             return
         end
         lastBikeRequest=now
@@ -1014,7 +1013,7 @@ local function bikeInput(input, processed)
     end
     if processed or UIS:GetFocusedTextBox() then return end
     if impactKey and input.KeyCode == impactKey then
-        bikeArmed=true;bikeArmedAt=os.clock()
+        bikeArmed=true
     else
         for _,key in pairs(slotKeys) do
             if input.KeyCode==key then bikeArmed=false;break end
@@ -1713,7 +1712,6 @@ local aimRenderName='SoraHubAim'
 RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
     local now=os.clock()
-    if bikeArmed and now-bikeArmedAt>3 then bikeArmed=false end
     if not State.AutoBike or not State.AutoAimBike or not State.AimAllowed then
         bikeAimUntil=0
     end
