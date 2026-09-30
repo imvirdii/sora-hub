@@ -1464,16 +1464,19 @@ RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,funct
     end
 end)
 
--- Reactive dribble: TakeBall animation and newly replicated Tackle cooldowns.
+-- Keep newly observed tackles active for their exported 0.9-second hitbox window.
+-- A cooldown is only the start signal, not a one-time range check.
 local cleanupDribble
 do
     local lastDribble=-math.huge
     local tracks=setmetatable({}, {__mode='k'})
+    local tackleThreats={}
     local folder,added
     local function stopWatching()
         if added then added:Disconnect();added=nil end
         folder=nil
         table.clear(tracks)
+        table.clear(tackleThreats)
     end
     cleanupDribble=stopWatching
     local function react(player,now)
@@ -1481,7 +1484,9 @@ do
         if not player or player==Player or isExcepted(player) or sameTeam(player) then return false end
         if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent
             or not Humanoid or Humanoid.Health<=0 or Character:FindFirstChild('CantDribble') or iframes(Character) then return false end
-        if workspace:GetAttribute('PlayersAllowedToUseSkills')==false or Player:GetAttribute('UsingSkill') then return false end
+        if workspace:GetAttribute('PlayersAllowedToUseSkills')==false then return false end
+        -- PowerLocal permits dribbling out of a charged punch.
+        if Player:GetAttribute('UsingSkill') and not Character:FindFirstChild('BeganChargingPunch') then return false end
         local ps=Player:FindFirstChild('PlayerStateFolder')
         if ps and ps:FindFirstChild('Stun') then return false end
         local other=player.Character
@@ -1505,21 +1510,44 @@ do
         Tackle:FireServer('Dribble',direction)
         return true
     end
-    local elapsed=0
-    connect(RunService.Heartbeat,function(dt)
-        if not Session.Alive then return end
-        if not State.AutoDribble then if added then stopWatching() end;return end
-        elapsed=elapsed+dt
-        if elapsed<0.03 then return end
-        elapsed=0
+    local function syncTackles()
         local current=RS:FindFirstChild('CooldownsFolder')
         if current~=folder then
             stopWatching();folder=current
             if folder then
                 added=folder.ChildAdded:Connect(function(entry)
+                    if not Session.Alive or not State.AutoDribble then return end
                     local id=entry.Name:match('^(%d+)Tackle$')
-                    if id then react(Players:GetPlayerByUserId(tonumber(id)),os.clock()) end
+                    local player=id and Players:GetPlayerByUserId(tonumber(id))
+                    if not player or player==Player or isExcepted(player) or sameTeam(player) then return end
+                    local now=os.clock()
+                    tackleThreats[player]={character=player.Character,expires=now+0.9,fired=react(player,now)}
                 end)
+            end
+        end
+    end
+    -- Attach immediately, so enabling the toggle does not leave a listener gap.
+    -- Existing cooldowns are deliberately not treated as fresh tackles.
+    syncTackles()
+    local elapsed,folderElapsed=0,0
+    connect(RunService.Heartbeat,function(dt)
+        if not Session.Alive then return end
+        folderElapsed=folderElapsed+dt
+        if folderElapsed>=0.5 then folderElapsed=0;syncTackles() end
+        if not State.AutoDribble then
+            table.clear(tackleThreats)
+            table.clear(tracks)
+            return
+        end
+        elapsed=elapsed+dt
+        if elapsed<0.03 then return end
+        elapsed=0
+        local now=os.clock()
+        for player,threat in pairs(tackleThreats) do
+            if now>=threat.expires or player.Parent~=Players or player.Character~=threat.character then
+                tackleThreats[player]=nil
+            elseif not threat.fired and react(player,now) then
+                threat.fired=true
             end
         end
         if not Character or not Character:FindFirstChild('Ball') or not Root or not Root.Parent then return end
