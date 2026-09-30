@@ -14,6 +14,7 @@ if not HubMode then warn('Sora Hub: this place is not supported.');return end
 -- Players excluded from targeted automation. Add exact Roblox usernames here.
 local Exceptions = {
     ["TheNextNagi"] = true,
+    ["LeoTheDominican"] = true,
 }
 local function isExcepted(player)
     return player ~= nil and Exceptions[player.Name] == true
