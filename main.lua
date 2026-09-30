@@ -570,7 +570,6 @@ local State = {
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
 local pendingPlayer, pendingAt, bikeArmed = nil, 0, false
-local pendingRushBike
 local aimStep
 local lastTrap, lastBikeTrap, lastRush, lastTackle, lastM2 = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 local lastAutoTD,tdFacingUntil,tdTarget=-math.huge,0,nil
@@ -664,7 +663,6 @@ local function bindCharacter(newCharacter)
     restoreSpeed()
     Character, Root, Humanoid = newCharacter, nil, nil
     speedBase, speedWritten, pendingPlayer, bikeArmed = nil, nil, nil, false
-    pendingRushBike=nil
     wasSprinting, dashDirection = false, nil
     tdFacingUntil,tdTarget=0,nil
     local newRoot = newCharacter:WaitForChild('HumanoidRootPart', 10)
@@ -799,7 +797,7 @@ toggle(Attack,'AutoDribble','Auto Dribble','F7',nil,
 Attack:AddSlider('SoraDribbleRange',{Text='Dribble vs Tackle Range',Default=15,Min=15,Max=30,Rounding=0})
 Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDribbleRange.Value end)
 toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function()
-    bikeArmed=false;pendingRushBike=nil
+    bikeArmed=false
 end)
 toggle(Attack,'CanonKaiser','Canon Kaiser',nil,updateCanonKaiser)
 toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
@@ -934,7 +932,6 @@ end)
 -- Preserve the original sequence: slot number, then the next LMB, lob first.
 -- One permanent input listener avoids stacking callbacks on repeated slot presses.
 local impactKey
-local lastBikeRequest=-math.huge
 local slotKeys = {
     SlotOne=Enum.KeyCode.One, SlotTwo=Enum.KeyCode.Two, SlotThree=Enum.KeyCode.Three,
     SlotFour=Enum.KeyCode.Four, SlotFive=Enum.KeyCode.Five, SlotSix=Enum.KeyCode.Six,
@@ -973,42 +970,6 @@ Attack:AddButton({Text='Rescan Auto Bike Slot', Func=function()
         Library:Notify('Impact Bicycle was not found in EquippedSkills.',4)
     end
 end})
-local lastLocalRush=-math.huge
-connect(Event.OnClientEvent,function(action,player,style,skill)
-    if player==Player and skill=='Explosive Rush' and action=='UseSkill' then
-        lastLocalRush=os.clock()
-    end
-end)
-local function bikeLobLocked()
-    local state=Player:FindFirstChild('PlayerStateFolder')
-    return Player:GetAttribute('UsingSkill')==true or (state and state:FindFirstChild('CantPunch')~=nil)
-end
-local function sendAutoBike(ball,root,now)
-    lastBikeRequest=now
-    Punch:FireServer('LobPass',ball,root.Position+Vector3.new(0,50,0))
-    Event:FireServer('UseSkill','Impact Bicycle')
-end
-local function flushRushBike(now)
-    local request=pendingRushBike
-    if not request then return end
-    local character=Player.Character
-    local humanoid=character and character:FindFirstChildOfClass('Humanoid')
-    local root=character and character:FindFirstChild('HumanoidRootPart')
-    local state=Player:FindFirstChild('PlayerStateFolder')
-    local cooldowns=RS:FindFirstChild('CooldownsFolder')
-    if not Session.Alive or not State.AutoBike or character~=request.character
-        or not root or not humanoid or humanoid.Health<=0
-        or request.ball.Parent~=character or now>request.expires
-        or workspace:GetAttribute('PlayersAllowedToUseSkills')==false
-        or (state and state:FindFirstChild('Stun'))
-        or (cooldowns and cooldowns:FindFirstChild(tostring(Player.UserId)..'Impact Bicycle')) then
-        pendingRushBike=nil
-        return
-    end
-    if bikeLobLocked() then return end
-    pendingRushBike=nil
-    sendAutoBike(request.ball,root,now)
-end
 local function bikeInput(input, processed)
     if not Session.Alive or not State.AutoBike or pendingKey or input==capturedInput then return end
     -- The original LMB listener does NOT reject gameProcessed input.
@@ -1019,38 +980,12 @@ local function bikeInput(input, processed)
         local ball = currentCharacter and currentCharacter:FindFirstChild('Ball')
         local currentRoot = currentCharacter and currentCharacter:FindFirstChild('HumanoidRootPart')
         if not ball or not currentRoot then return end
-        local now=os.clock()
-        if now-lastBikeRequest<0.25 then return end
-        local humanoid=currentCharacter:FindFirstChildOfClass('Humanoid')
-        local state=Player:FindFirstChild('PlayerStateFolder')
-        -- The game's own LMB listener can set UsingSkill/CantPunch/cooldown
-        -- before this callback runs. Those snapshots must not veto this click.
-        local blocked=not humanoid or humanoid.Health<=0
-            or workspace:GetAttribute('PlayersAllowedToUseSkills')==false
-            or (state and state:FindFirstChild('Stun'))
-        if blocked then
-            Library:Notify('Auto Bike blocked: character unavailable, stunned, or skills disabled.',3)
-            return
-        end
-        if now-lastLocalRush<=2 and bikeLobLocked() then
-            -- One bounded request; don't lob away possession during rush recovery.
-            if not pendingRushBike then
-                pendingRushBike={character=currentCharacter,ball=ball,expires=now+0.75}
-            end
-            return
-        end
-        pendingRushBike=nil
-        sendAutoBike(ball,currentRoot,now)
+        Punch:FireServer('LobPass', ball, currentRoot.Position + Vector3.new(0,50,0))
+        Event:FireServer('UseSkill', 'Impact Bicycle')
         return
     end
     if processed or UIS:GetFocusedTextBox() then return end
-    if impactKey and input.KeyCode == impactKey then
-        bikeArmed=true
-    else
-        for _,key in pairs(slotKeys) do
-            if input.KeyCode==key then bikeArmed=false;pendingRushBike=nil;break end
-        end
-    end
+    if impactKey and input.KeyCode == impactKey then bikeArmed = true end
 end
 connect(UIS.InputBegan, bikeInput)
 
@@ -1744,10 +1679,9 @@ local aimRenderName='SoraHubAim'
 RunService:BindToRenderStep(aimRenderName,Enum.RenderPriority.Last.Value+1,function()
     if not Session.Alive then return end
     local now=os.clock()
-    flushRushBike(now)
     if trackAutoTD(now) then shootAfterAimStep(false);return end
     local aimed=aimStep()
-    shootAfterAimStep(aimed and not (State.AutoBike and (bikeArmed or pendingRushBike)))
+    shootAfterAimStep(aimed)
     if not (State.AutoAim and State.AimAllowed) and State.SpeedDemon and dashDirection and Root and Root.Parent then
         Root.CFrame = CFrame.new(Root.Position, Root.Position+dashDirection)
     end
@@ -2748,7 +2682,6 @@ local function cleanup()
     if camera and originalFOV and State.LockFOV then camera.FieldOfView = originalFOV end
     if shaker and shaker.Update == noShake then shaker.Update = oldShake end
     pendingPlayer, bikeArmed = nil, false
-    pendingRushBike=nil
     if Env.SoraHubSession == Session then Env.SoraHubSession = nil end
 end
 Session.Cleanup = cleanup
