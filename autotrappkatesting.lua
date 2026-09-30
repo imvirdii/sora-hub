@@ -9,8 +9,8 @@ local Player=Players.LocalPlayer
 local Event=RS:WaitForChild('Remotes'):WaitForChild('TranciverRemote')
 local Env=type(getgenv)=='function' and getgenv() or _G
 if Env.PKATrapTest then Env.PKATrapTest.Unload() end
-local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.12,
-    Interval=0.03,Horizon=0.4,PathStep=0.02,MaxAcceleration=250,
+local Config={Enabled=true,Trap='Black Hole Trap',Radius=12,Lead=0.22,
+    Interval=1/60,Horizon=0.65,PathStep=0.02,MaxAcceleration=250,
     MaxAge=8,MaxTracked=4,RequestGap=0.5,IgnoreTeammates=true,Debug=true}
 local Exceptions={TheNextNagi=true,LeoTheDominican=true}
 local ShotSkills={['Trivela (Shot)']=true}
@@ -158,6 +158,11 @@ local function sample(record,position,now)
         record.position=nil;record.velocity=nil;record.previousVelocity=nil
         return false
     end
+    -- Repeated replicated positions are not proof the moving ball stopped.
+    -- Preserve the last estimate briefly and measure across the entire update gap.
+    if displacement.Magnitude<0.01 then
+        return record.velocity~=nil and dt<=0.10
+    end
     local measured=displacement/dt
     if record.previousVelocity then
         local a=(measured-record.previousVelocity)/((dt+(record.previousDt or dt))*0.5)
@@ -176,6 +181,23 @@ local function sample(record,position,now)
     -- Replication can alternate stationary and moving frames. Such jumps reset
     -- acceleration confidence, but must not discard a usable velocity estimate.
     return true
+end
+local function predictEntry(record,ball,root,now)
+    local position=ball.Position
+    if (position-root.Position).Magnitude<=Config.Radius then return 0 end
+    if sample(record,position,now) then
+        local acceleration=record.acceleration
+        local velocity=record.velocity+acceleration*(0.5*(record.previousDt or 0))
+        local age=math.min(math.max(now-record.at,0),0.08)
+        position=position+velocity*age+acceleration*(0.5*age*age)
+        return arrival(position,velocity+acceleration*age,acceleration,root)
+    end
+    -- Physics velocity can be available on the first released frame, before
+    -- there are enough position updates. Position-derived motion takes over.
+    local velocity=ball.AssemblyLinearVelocity
+    if velocity.Magnitude>2 and (not record.previousVelocity) then
+        return arrival(position,velocity,Vector3.zero,root)
+    end
 end
 local Gui=Instance.new('ScreenGui')
 Gui.Name='PKAAutoTrapTest';Gui.ResetOnSpawn=false;Gui.Parent=Player:WaitForChild('PlayerGui')
@@ -208,7 +230,7 @@ trapButton=button('Trap: '..Config.Trap,10,68,290,function()
     choice=choice%#choices+1;Config.Trap=choices[choice];trapButton.Text='Trap: '..Config.Trap
 end)
 local radiusText=label('Trigger radius: 12 studs',103)
-local leadText=label('Activation lead: 120 ms',160)
+local leadText=label('Activation lead: 220 ms',160)
 button('- radius',10,129,140,function()
     Config.Radius=math.max(3,Config.Radius-1);radiusText.Text='Trigger radius: '..Config.Radius..' studs'
 end)
@@ -216,7 +238,7 @@ button('+ radius',160,129,140,function()
     Config.Radius=math.min(40,Config.Radius+1);radiusText.Text='Trigger radius: '..Config.Radius..' studs'
 end)
 local function lead(delta)
-    Config.Lead=math.clamp(Config.Lead+delta,0,0.3)
+    Config.Lead=math.clamp(Config.Lead+delta,0,0.5)
     leadText.Text=string.format('Activation lead: %.0f ms',Config.Lead*1000)
 end
 button('- timing',10,186,140,function()lead(-0.01)end)
@@ -317,7 +339,7 @@ connect(RunService.Heartbeat,function(dt)
     if not Session.Alive or not Config.Enabled then return end
     elapsed=elapsed+dt
     if elapsed<Config.Interval then return end
-    elapsed=0
+    elapsed=elapsed%Config.Interval
     local now=os.clock()
     -- Poll wind-ups BEFORE the idle early return. A separate release broadcast
     -- is not required when the captured ball leaves the shooter's character.
@@ -347,22 +369,12 @@ connect(RunService.Heartbeat,function(dt)
                 r.released=true
                 local position=ball.Position
                 local distance=(position-root.Position).Magnitude
-                local sampled=sample(r,position,now)
-                local eta
-                -- Proximity never waits for curve warm-up or a speed threshold.
-                if distance<=Config.Radius then
-                    eta=0
-                elseif sampled then
-                    -- Finite differences measure interval-average velocity;
-                    -- extrapolate half an interval to estimate current velocity.
-                    local velocity=r.velocity+r.acceleration*(0.5*(r.previousDt or 0))
-                    eta=arrival(position,velocity,r.acceleration,root)
-                end
+                local eta=predictEntry(r,ball,root,now)
                 if eta and eta<bestEta then best,bestEta=r,eta end
                 if distance<nearest then
                     nearest=distance
                     trackingMessage=string.format('Tracking: %.1f studs | radius %.0f | %s',distance,Config.Radius,
-                        sampled and 'no entry predicted yet' or 'sampling movement')
+                        r.velocity and 'no entry predicted yet' or 'sampling movement')
                 end
             end
         end
