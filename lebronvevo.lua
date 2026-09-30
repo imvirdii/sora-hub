@@ -96,6 +96,7 @@ Frame.BackgroundColor3 =
 Frame.BorderSizePixel = 0
 
 Frame.Parent = ScreenGui
+local GuiVisible = true
 
 local Corner = Instance.new("UICorner")
 Corner.CornerRadius = UDim.new(0, 8)
@@ -144,11 +145,15 @@ local function UpdateGUI()
 end
 
 connect(UserInputService.InputBegan, function(input, gameProcessed)
-    if gameProcessed or UserInputService:GetFocusedTextBox() then return end
+    -- End always hides the panel and all Metavision visuals together.
     if input.KeyCode == Enum.KeyCode.End then
-        ScreenGui.Enabled = not ScreenGui.Enabled
+        GuiVisible = not GuiVisible
+        Frame.Visible = GuiVisible
+        ScreenGui.Enabled = GuiVisible
+        if resetMetavision then resetMetavision() end
         return
     end
+    if gameProcessed or UserInputService:GetFocusedTextBox() then return end
     if input.KeyCode == Enum.KeyCode.F2 then
         AutoTrapEnabled = not AutoTrapEnabled
     elseif input.KeyCode == Enum.KeyCode.F3 then
@@ -855,7 +860,7 @@ resetMetavision = function()
 end
 local visualElapsed = 0
 connect(RunService.Heartbeat, function(dt)
-    if not Session.Alive or not State.Metavision then return end
+    if not Session.Alive or not GuiVisible or not State.Metavision then return end
     visualElapsed = visualElapsed + dt
     if visualElapsed < 0.05 then return end
     visualElapsed = 0
