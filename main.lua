@@ -1342,6 +1342,7 @@ end
 local aimStep
 do
     local goals,nextRefresh,selected,side={},0,nil,nil
+    local previousDirection,previousGoal,previousSide
     local function refreshGoals(now)
         nextRefresh=now+2
         local found={}
@@ -1367,6 +1368,7 @@ do
     aimStep=function()
         local function stop()
             selected,side=nil,nil
+            previousDirection,previousGoal,previousSide=nil,nil,nil
             releaseRotation()
             return false
         end
@@ -1406,10 +1408,10 @@ do
         if hit.Z>1 then side=1 elseif hit.Z< -1 then side=-1 end
         local folder=Character and Character:FindFirstChild('Ball')
         local ball=folder and folder:FindFirstChild('Ball')
-        local margin=1
+        local margin=1.5
         local origin=Root.Position
         if ball and ball:IsA('BasePart') then
-            margin=math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5+0.2
+            margin=math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5+0.75
             origin=ball.Position
         end
         local cf,size=bar.CFrame,bar.Size
@@ -1421,27 +1423,36 @@ do
         local target=Vector3.new(corner.X,Root.Position.Y,corner.Z)
         local delta=target-Root.Position
         if delta.Magnitude<0.1 then return stop() end
-        local shotFlat=Vector3.new(corner.X-origin.X,0,corner.Z-origin.Z).Magnitude
+        local shotHorizontal=Vector3.new(corner.X-origin.X,0,corner.Z-origin.Z)
+        local shotFlat=shotHorizontal.Magnitude
+        if shotFlat<0.1 then return stop() end
         -- Cap both the shot-origin angle and the camera ray at the crossbar.
         -- This bounds the aim direction, not server-authored curve/lift physics.
         local maxPitch=math.atan2(ceiling-origin.Y,math.max(shotFlat,0.1))
-        local cameraToCorner=Vector3.new(corner.X-frame.Position.X,0,corner.Z-frame.Position.Z)
-        local cameraFlat=cameraToCorner.Magnitude
+        -- Shot direction starts at the ball, not the offset third-person camera.
+        local shotYaw=shotHorizontal.Unit
+        local cameraLocal=mouth.CFrame:PointToObjectSpace(frame.Position)
+        local yawLocal=mouth.CFrame:VectorToObjectSpace(shotYaw)
+        if math.abs(yawLocal.X)<0.001 then return stop() end
+        local cameraFlat=-cameraLocal.X/yawLocal.X
         if cameraFlat<0.1 then return stop() end
         maxPitch=math.min(maxPitch,math.atan2(ceiling-frame.Position.Y,math.max(cameraFlat,0.1)))
         local pitch=math.asin(math.clamp(frame.LookVector.Y,-1,1))
-        if pitch>maxPitch then
-            -- Correct yaw as well as pitch: retaining a skyward camera's yaw
-            -- can send camera-directed skills wide even when the body is aimed.
-            local direction=cameraToCorner.Unit*math.cos(maxPitch)+Vector3.new(0,math.sin(maxPitch),0)
-            camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+direction)
+        local aimPitch=math.min(pitch,maxPitch)
+        local shotDirection=shotYaw*math.cos(aimPitch)+Vector3.new(0,math.sin(aimPitch),0)
+        -- Align at every pitch, including views already below the crossbar.
+        if frame.LookVector:Dot(shotDirection)<0.999999 then
+            camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+shotDirection)
         end
         lockRotation()
         local direction=delta.Unit
         if Root.CFrame.LookVector:Dot(direction)<0.999999 then
             Root.CFrame=CFrame.lookAt(Root.Position,target)
         end
-        return true
+        local stable=previousGoal==mouth and previousSide==side and previousDirection
+            and previousDirection:Dot(shotDirection)>0.99985
+        previousGoal,previousSide,previousDirection=mouth,side,shotDirection
+        return stable and true or false
     end
 end
 -- Original PowerfulShot priority and remote sequences, after a successful aim.
