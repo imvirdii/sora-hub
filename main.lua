@@ -1338,93 +1338,100 @@ local function defenseStep(now)
     end
 end
 
--- These targets are helpers created by the original hub, not game-owned objects.
--- Keep our own copies so Auto Aim also works in a fresh session.
-local aimGeometry,aimCorners,aimWalls
-local function ensureAimGeometry()
-    if not aimGeometry or not aimGeometry.Parent then
-        aimGeometry=Instance.new('Folder')
-        aimGeometry.Name='SoraHubAimGeometry'
-        aimGeometry.Parent=workspace
-        aimCorners=Instance.new('Folder')
-        aimCorners.Name='Corners'
-        aimCorners.Parent=aimGeometry
-        aimWalls=Instance.new('Folder')
-        aimWalls.Name='FinalWalls'
-        aimWalls.Parent=aimGeometry
-    end
-    local mini=workspace:GetAttribute('GameField')=='MiniField'
-    local y=mini and Root.Position.Y or -92
-    local x1,x2=mini and -669 or -464.5,mini and -1113 or -1107.5
-    local z1,z2=mini and 372.5 or -369,mini and 401 or -341
-    for i=1,4 do
-        local name='Corner'..i
-        local part=aimCorners:FindFirstChild(name)
-        if not part then
-            part=Instance.new('Part')
-            part.Name=name
-            part.Anchored=true
-            part.CanCollide=false
-            part.CanTouch=false
-            part.CanQuery=false
-            part.Transparency=1
-            part.Size=Vector3.new(1,1,1)
-            part.Parent=aimCorners
+-- Resolve real goal mouths; no helper parts or per-frame raycast allocations.
+local aimStep
+do
+    local goals,nextRefresh,selected,side={},0,nil,nil
+    local function refreshGoals(now)
+        nextRefresh=now+2
+        local found={}
+        local function inspect(model)
+            local mouth=model:FindFirstChild('LineHitbox')
+            if not mouth or not mouth:IsA('BasePart') then return end
+            local bar
+            for _,p in ipairs(model:GetChildren()) do
+                if p.Name=='Shtanga' and p:IsA('BasePart') and p.Size.Y<math.max(p.Size.X,p.Size.Z) then
+                    if not bar or p.Position.Y>bar.Position.Y then bar=p end
+                end
+            end
+            if bar then found[#found+1]={mouth=mouth,bar=bar} end
         end
-        part.Position=Vector3.new(i<=2 and x1 or x2,y,i%2==1 and z1 or z2)
-    end
-    for i=1,2 do
-        local name='FinalWall'..i
-        local part=aimWalls:FindFirstChild(name)
-        if not part then
-            part=Instance.new('Part')
-            part.Name=name
-            part.Anchored=true
-            part.CanCollide=false
-            part.CanTouch=false
-            part.CanQuery=true
-            part.Transparency=1
-            part.Size=Vector3.new(0.1,2048,2048)
-            part.Parent=aimWalls
-        end
-        part.Position=Vector3.new(i==1 and x1 or x2,mini and y or -90,z1)
-    end
-    return aimCorners,aimWalls
-end
-local function aimStep()
-    if not State.AutoAim or not State.AimAllowed then
-        releaseRotation(); return false
-    end
-    if not Root or not Root.Parent or not Humanoid or Humanoid.Health<=0 then return false end
-    local corners,walls=ensureAimGeometry()
-    local currentCamera=workspace.CurrentCamera
-    if not corners or not walls or not currentCamera then return false end
-
-    -- Match the supplied standalone ray and nearest-corner selection.
-    local rayParams=RaycastParams.new()
-    rayParams.FilterDescendantsInstances=walls:GetChildren()
-    rayParams.FilterType=Enum.RaycastFilterType.Include
-    local hit=workspace:Raycast(currentCamera.CFrame.Position,currentCamera.CFrame.LookVector*10000,rayParams)
-    if not hit then return false end
-    local target,minimum=nil,math.huge
-    for i=1,4 do
-        local corner=corners:FindFirstChild('Corner'..i)
-        if corner then
-            local ok,position=pcall(function() return corner.Position end)
-            if ok and typeof(position)=='Vector3' then
-                local distance=(hit.Position-position).Magnitude
-                if distance<minimum then target,minimum=position,distance end
+        for _,object in ipairs(workspace:GetChildren()) do
+            inspect(object)
+            if object.Name=='GameField' or object.Name=='MiniField' then
+                for _,child in ipairs(object:GetChildren()) do inspect(child) end
             end
         end
+        goals=found
     end
-    if not target then return false end
-    local targetPosition=Vector3.new(target.X,Root.Position.Y,target.Z)
-    local delta=targetPosition-Root.Position
-    if delta.Magnitude<0.001 then return false end
-    local direction=delta.Unit
-    lockRotation()
-    Root.CFrame=CFrame.new(Root.Position,Root.Position+direction)
-    return true
+    aimStep=function()
+        local function stop()
+            selected,side=nil,nil
+            releaseRotation()
+            return false
+        end
+        if not State.AutoAim or not State.AimAllowed then return stop() end
+        if not Root or not Root.Parent or not Humanoid or Humanoid.Health<=0 then return stop() end
+        local camera=workspace.CurrentCamera
+        if not camera or camera.CameraType==Enum.CameraType.Scriptable then return stop() end
+        local now=os.clock()
+        if now>=nextRefresh then refreshGoals(now) end
+        local frame=camera.CFrame
+        local goal,hit,tBest=nil,nil,math.huge
+        for _,g in ipairs(goals) do
+            local mouth=g.mouth
+            if mouth.Parent and g.bar.Parent and math.abs(mouth.Position.Y-Root.Position.Y)<45 then
+                local origin=mouth.CFrame:PointToObjectSpace(frame.Position)
+                local look=mouth.CFrame:VectorToObjectSpace(frame.LookVector)
+                if math.abs(look.X)>0.001 then
+                    local t=-origin.X/look.X
+                    if t>0 and t<tBest and t<2000 then
+                        goal,hit,tBest=g,origin+look*t,t
+                    end
+                end
+            end
+        end
+        if not goal then return stop() end
+        local mouth,bar=goal.mouth,goal.bar
+        if selected~=mouth then selected=mouth;side=hit.Z>=0 and 1 or -1 end
+        -- A small centre dead zone prevents left/right flicker.
+        if hit.Z>1 then side=1 elseif hit.Z< -1 then side=-1 end
+        local folder=Character and Character:FindFirstChild('Ball')
+        local ball=folder and folder:FindFirstChild('Ball')
+        local margin=1
+        local origin=Root.Position
+        if ball and ball:IsA('BasePart') then
+            margin=math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5+0.2
+            origin=ball.Position
+        end
+        local cf,size=bar.CFrame,bar.Size
+        local halfHeight=(math.abs(cf.RightVector.Y)*size.X+math.abs(cf.UpVector.Y)*size.Y+math.abs(cf.LookVector.Y)*size.Z)*0.5
+        local ceiling=bar.Position.Y-halfHeight-margin
+        local width=math.max(0,mouth.Size.Z*0.5-margin)
+        local corner=mouth.CFrame:PointToWorldSpace(Vector3.new(0,0,side*width))
+        local target=Vector3.new(corner.X,Root.Position.Y,corner.Z)
+        local delta=target-Root.Position
+        if delta.Magnitude<0.1 then return stop() end
+        local shotFlat=Vector3.new(corner.X-origin.X,0,corner.Z-origin.Z).Magnitude
+        local horizontal=Vector3.new(frame.LookVector.X,0,frame.LookVector.Z)
+        if horizontal.Magnitude<0.001 then return stop() end
+        -- Cap both the shot-origin angle and the camera ray at the crossbar.
+        -- This bounds the aim direction, not server-authored curve/lift physics.
+        local maxPitch=math.atan2(ceiling-origin.Y,math.max(shotFlat,0.1))
+        local cameraFlat=tBest*horizontal.Magnitude
+        maxPitch=math.min(maxPitch,math.atan2(ceiling-frame.Position.Y,math.max(cameraFlat,0.1)))
+        local pitch=math.atan2(frame.LookVector.Y,horizontal.Magnitude)
+        if pitch>maxPitch then
+            local direction=horizontal.Unit*math.cos(maxPitch)+Vector3.new(0,math.sin(maxPitch),0)
+            camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+direction)
+        end
+        lockRotation()
+        local direction=delta.Unit
+        if Root.CFrame.LookVector:Dot(direction)<0.999999 then
+            Root.CFrame=CFrame.lookAt(Root.Position,target)
+        end
+        return true
+    end
 end
 -- Original PowerfulShot priority and remote sequences, after a successful aim.
 local shootAfterAimStep
@@ -1864,7 +1871,6 @@ local function visualRayParams(ball,now)
     nextFilterRefresh=now+0.5
     filterBall=ball
     local excluded={visualFolder}
-    if aimGeometry then table.insert(excluded,aimGeometry) end
     for _,name in ipairs({'Corners','FinalWalls'}) do
         local object=workspace:FindFirstChild(name)
         if object then table.insert(excluded,object) end
@@ -2620,7 +2626,6 @@ local function cleanup()
     if cleanupDribble then cleanupDribble() end
     if cleanupMetavision then cleanupMetavision() end
     RunService:UnbindFromRenderStep(aimRenderName)
-    if aimGeometry then aimGeometry:Destroy(); aimGeometry=nil end
     clearTakeBallAnimation()
     takeBallAnimation:Destroy()
     State.AutoFarm=false
