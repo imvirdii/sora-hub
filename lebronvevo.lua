@@ -145,12 +145,11 @@ local function UpdateGUI()
 end
 
 connect(UserInputService.InputBegan, function(input, gameProcessed)
-    -- End always hides the panel and all Metavision visuals together.
+    -- End hides only the control panel; Metavision visuals stay active.
     if input.KeyCode == Enum.KeyCode.End then
         GuiVisible = not GuiVisible
         Frame.Visible = GuiVisible
         ScreenGui.Enabled = GuiVisible
-        if resetMetavision then resetMetavision() end
         return
     end
     if gameProcessed or UserInputService:GetFocusedTextBox() then return end
@@ -860,7 +859,7 @@ resetMetavision = function()
 end
 local visualElapsed = 0
 connect(RunService.Heartbeat, function(dt)
-    if not Session.Alive or not GuiVisible or not State.Metavision then return end
+    if not Session.Alive or not State.Metavision then return end
     visualElapsed = visualElapsed + dt
     if visualElapsed < 0.05 then return end
     visualElapsed = 0
