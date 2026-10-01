@@ -191,7 +191,19 @@ else
     end)
 end
 connect(LocalPlayer.CharacterAdded, function() BikeArmed = false end)
+-- Check this panel directly: gameProcessed can also be true for gameplay clicks.
+local function pointerOverHub(input)
+    if not ScreenGui.Enabled or not Frame.Visible then return false end
+    local point = input.Position
+    local inset = game:GetService("GuiService"):GetGuiInset()
+    local x = point.X - (ScreenGui.IgnoreGuiInset and 0 or inset.X)
+    local y = point.Y - (ScreenGui.IgnoreGuiInset and 0 or inset.Y)
+    local position, size = Frame.AbsolutePosition, Frame.AbsoluteSize
+    return x >= position.X and x <= position.X + size.X
+        and y >= position.Y and y <= position.Y + size.Y
+end
 connect(UserInputService.InputBegan, function(input, gameProcessed)
+    if not Alive then return end
     -- End always controls the whole display, even when Roblox consumes the key.
     if input.KeyCode == Enum.KeyCode.End then
         GuiVisible = not GuiVisible
@@ -201,14 +213,15 @@ connect(UserInputService.InputBegan, function(input, gameProcessed)
     end
     if UserInputService:GetFocusedTextBox() then return end
     if AutoBikeEnabled and BikeArmed and input.UserInputType == Enum.UserInputType.MouseButton1 then
-        -- UI clicks must not consume an armed bike or send a shot.
-        if gameProcessed then return end
-        BikeArmed = false
+        -- The game may consume LMB before this listener sees it.
+        -- Only the hub panel blocks this click; keep keyboard filtering below.
+        if pointerOverHub(input) then return end
         local character = LocalPlayer.Character
         local ball = character and character:FindFirstChild("Ball")
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local punch = ReplicatedStorage.Remotes:FindFirstChild("PunchRemote")
         if not ball or not root or not punch then return end
+        BikeArmed = false
         punch:FireServer("LobPass", ball, root.Position + Vector3.new(0, 50, 0))
         Transceiver:FireServer("UseSkill", "Impact Bicycle")
         return
