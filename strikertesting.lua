@@ -31,7 +31,7 @@ end
 local Gui=Instance.new('ScreenGui')
 Gui.Name='StrikerTesting';Gui.ResetOnSpawn=false;Gui.Parent=Player:WaitForChild('PlayerGui')
 local panel=Instance.new('Frame')
-panel.Size=UDim2.fromOffset(310,150);panel.Position=UDim2.new(0,20,0.5,-75)
+panel.Size=UDim2.fromOffset(310,185);panel.Position=UDim2.new(0,20,0.5,-92)
 panel.BackgroundColor3=Color3.fromRGB(24,26,33);panel.Parent=Gui
 local function label(text,y,height)
     local x=Instance.new('TextLabel');x.Size=UDim2.new(1,-20,0,height or 22)
@@ -99,16 +99,77 @@ local function scanGoals(now)
         end
     end
 end
+local cornersEnabled=true
+local cornerTargets={}
+local cornerButton
+cornerButton=button('Goal Corner Targets: ON',10,104,290,function()
+    cornersEnabled=not cornersEnabled
+    cornerButton.Text='Goal Corner Targets: '..(cornersEnabled and 'ON' or 'OFF')
+    for _,markers in pairs(cornerTargets) do
+        for _,marker in ipairs(markers) do marker.gui.Enabled=cornersEnabled end
+    end
+end)
+local function updateCorners()
+    local present={}
+    for _,mouth in ipairs(goals) do
+        if mouth.Parent then
+            present[mouth]=true
+            local markers=cornerTargets[mouth]
+            if not markers then
+                markers={};cornerTargets[mouth]=markers
+                for i=1,4 do
+                    local anchor=newLine(Color3.fromRGB(255,210,75))
+                    anchor.Name='GoalCornerTarget';anchor.Size=Vector3.new(0.1,0.1,0.1)
+                    local gui=Instance.new('BillboardGui');gui.Adornee=anchor
+                    gui.Size=UDim2.fromOffset(22,22);gui.AlwaysOnTop=true;gui.MaxDistance=650;gui.Parent=anchor
+                    local ring=Instance.new('Frame');ring.Size=UDim2.fromScale(1,1)
+                    ring.BackgroundTransparency=1;ring.Parent=gui
+                    local round=Instance.new('UICorner');round.CornerRadius=UDim.new(1,0);round.Parent=ring
+                    local stroke=Instance.new('UIStroke');stroke.Color=Color3.fromRGB(255,210,75);stroke.Thickness=2;stroke.Parent=ring
+                    local dot=Instance.new('Frame');dot.AnchorPoint=Vector2.new(0.5,0.5);dot.Position=UDim2.fromScale(0.5,0.5)
+                    dot.Size=UDim2.fromOffset(4,4);dot.BorderSizePixel=0;dot.BackgroundColor3=stroke.Color;dot.Parent=ring
+                    markers[i]={anchor=anchor,gui=gui}
+                end
+            end
+            -- Keep targets inside the mouth, with the top below the crossbar.
+            local top=mouth.Size.Y/2-1.5
+            for _,bar in ipairs(mouth.Parent:GetChildren()) do
+                if bar.Name=='Shtanga' and bar:IsA('BasePart') and bar.Size.Y<math.max(bar.Size.X,bar.Size.Z) then
+                    local barLocal=mouth.CFrame:PointToObjectSpace(bar.Position)
+                    top=math.min(top,barLocal.Y-bar.Size.Y/2-1.5)
+                end
+            end
+            local bottom=-mouth.Size.Y/2+1.5
+            top=math.max(bottom,top)
+            local width=math.max(0,mouth.Size.Z/2-1.5)
+            for i,marker in ipairs(markers) do
+                local y=i<=2 and top or bottom
+                local z=i%2==1 and -width or width
+                marker.anchor.Position=mouth.CFrame:PointToWorldSpace(Vector3.new(0,y,z))
+                marker.gui.Enabled=cornersEnabled
+            end
+        end
+    end
+    for mouth,markers in pairs(cornerTargets) do
+        if not present[mouth] then
+            for _,marker in ipairs(markers) do marker.anchor:Destroy() end
+            cornerTargets[mouth]=nil
+        end
+    end
+end
+
 local function flat(v) return Vector3.new(v.X,0,v.Z) end
 connect(RunService.Heartbeat,function(dt)
-    if not openingEnabled and not angleEnabled then return end
+    if not openingEnabled and not angleEnabled and not cornersEnabled then return end
     visualElapsed=visualElapsed+dt;if visualElapsed<0.1 then return end;visualElapsed=visualElapsed%0.1
     hideGuides()
+    local now=os.clock()
+    if now>=nextScan then scanGoals(now);updateCorners() end
+    if not openingEnabled and not angleEnabled then return end
     local ch=Player.Character;local root=ch and ch:FindFirstChild('HumanoidRootPart')
     local human=ch and ch:FindFirstChildOfClass('Humanoid')
     local ball=ownedBall(Player);local camera=workspace.CurrentCamera
     if not root or not human or human.Health<=0 or not ball or not camera then return end
-    local now=os.clock();if now>=nextScan then scanGoals(now) end
     local facing=flat(camera.CFrame.LookVector)
     if facing.Magnitude<0.05 then facing=flat(root.CFrame.LookVector) end
     if facing.Magnitude<0.001 then return end;facing=facing.Unit
@@ -183,9 +244,9 @@ function Session.Unload()
     visuals:Destroy();Gui:Destroy()
     if Env.StrikerTesting==Session then Env.StrikerTesting=nil end
 end
-button('Unload',10,108,140,Session.Unload)
-local hint=label('End: hide panel',110,22)
-hint.Position=UDim2.fromOffset(155,110);hint.Size=UDim2.fromOffset(145,22)
+button('Unload',10,141,140,Session.Unload)
+local hint=label('End: hide panel',143,22)
+hint.Position=UDim2.fromOffset(155,143);hint.Size=UDim2.fromOffset(145,22)
 connect(Input.InputBegan,function(input,processed)
     if processed or Input:GetFocusedTextBox() then return end
     if input.KeyCode==Enum.KeyCode.End then panel.Visible=not panel.Visible end
