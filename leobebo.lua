@@ -70,7 +70,7 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 local Frame = Instance.new("Frame")
 Frame.Name = "LeoStatus"
-Frame.Size = UDim2.new(0, 250, 0, 78)
+Frame.Size = UDim2.new(0, 250, 0, 117)
 Frame.Position = UDim2.new(0, 15, 0, 15)
 Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 Frame.BorderSizePixel = 0
@@ -95,6 +95,8 @@ local function CreateStatus(name, row, text)
     return button
 end
 local AutoBikeButton = CreateStatus("AutoBikeButton", 0, "")
+local RescanBikeButton = CreateStatus("RescanBikeButton", 2, "RESCAN BIKE SLOT")
+RescanBikeButton.TextColor3 = Color3.fromRGB(235, 235, 235)
 local CameraShakeButton = CreateStatus("CameraShakeButton", 1, "REMOVE CAMERA SHAKE")
 CameraShakeButton.TextColor3 = Color3.fromRGB(235, 235, 235)
 connect(CameraShakeButton.Activated, function()
@@ -148,20 +150,34 @@ local function ToggleBike()
 end
 connect(AutoBikeButton.Activated, ToggleBike)
 
--- Scan once when EquippedSkills is available, matching the original Auto Bike.
+-- Scan on startup and on request; no continuous slot polling.
 local SlotKeys = {
     SlotOne=Enum.KeyCode.One, SlotTwo=Enum.KeyCode.Two, SlotThree=Enum.KeyCode.Three,
     SlotFour=Enum.KeyCode.Four, SlotFive=Enum.KeyCode.Five, SlotSix=Enum.KeyCode.Six,
     SlotSeven=Enum.KeyCode.Seven, SlotEight=Enum.KeyCode.Eight, SlotNine=Enum.KeyCode.Nine,
 }
 local function ScanBikeSlot(skills)
+    ImpactKey, BikeArmed = nil, false
+    if not skills then return false end
     for slot, key in pairs(SlotKeys) do
         if skills:GetAttribute(slot) == "Impact Bicycle" then
             ImpactKey = key
-            return
+            return true
         end
     end
+    return false
 end
+connect(RescanBikeButton.Activated, function()
+    if not Alive then return end
+    local found = ScanBikeSlot(LocalPlayer:FindFirstChild("EquippedSkills"))
+    if found then
+        RescanBikeButton.Text = "RESCAN BIKE: " .. ImpactKey.Name
+        RescanBikeButton.TextColor3 = Color3.fromRGB(85, 255, 85)
+    else
+        RescanBikeButton.Text = "RESCAN: BIKE NOT EQUIPPED"
+        RescanBikeButton.TextColor3 = Color3.fromRGB(255, 80, 80)
+    end
+end)
 local equipped = LocalPlayer:FindFirstChild("EquippedSkills")
 if equipped then
     ScanBikeSlot(equipped)
