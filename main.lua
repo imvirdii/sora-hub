@@ -1410,16 +1410,21 @@ do
         if hit.Z>1 then side=1 elseif hit.Z< -1 then side=-1 end
         local folder=Character and Character:FindFirstChild('Ball')
         local ball=folder and folder:FindFirstChild('Ball')
-        local margin=1.5
+        local margin=3
         local origin=Root.Position
         if ball and ball:IsA('BasePart') then
-            margin=math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5+0.75
+            margin=math.max(3,math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*0.5+1.5)
             origin=ball.Position
         end
         local cf,size=bar.CFrame,bar.Size
         local halfHeight=(math.abs(cf.RightVector.Y)*size.X+math.abs(cf.UpVector.Y)*size.Y+math.abs(cf.LookVector.Y)*size.Z)*0.5
+        -- Conservative clearance for small release/replication errors. These
+        -- are aiming margins, not a claimed model of server shot physics.
+        local range=Vector3.new(mouth.Position.X-origin.X,0,mouth.Position.Z-origin.Z).Magnitude
+        local extra=math.min(1.5,range/400)
+        margin=margin+extra
         -- Keep the camera's maximum aim visibly below the underside of the bar.
-        local ceiling=bar.Position.Y-halfHeight-math.max(2,margin)
+        local ceiling=bar.Position.Y-halfHeight-math.max(3.5+extra,margin)
         local width=math.max(0,mouth.Size.Z*0.5-margin)
         local corner=mouth.CFrame:PointToWorldSpace(Vector3.new(0,0,side*width))
         local target=Vector3.new(corner.X,Root.Position.Y,corner.Z)
@@ -1443,17 +1448,20 @@ do
         local aimPitch=math.min(pitch,maxPitch)
         local shotDirection=shotYaw*math.cos(aimPitch)+Vector3.new(0,math.sin(aimPitch),0)
         -- Align at every pitch, including views already below the crossbar.
-        if frame.LookVector:Dot(shotDirection)<0.999999 then
+        if frame.LookVector:Dot(shotDirection)<0.99999999 then
             camera.CFrame=CFrame.lookAt(frame.Position,frame.Position+shotDirection)
         end
         lockRotation()
         local direction=delta.Unit
-        local facingSettled=Root.CFrame.LookVector:Dot(direction)>0.99985
-        if Root.CFrame.LookVector:Dot(direction)<0.999999 then
+        -- Bound angular drift by its displacement at the goal, so a small
+        -- angle at long distance cannot count as a settled shot.
+        local alignment=math.cos(math.atan2(0.35,math.max(shotFlat,delta.Magnitude)))
+        local facingSettled=Root.CFrame.LookVector:Dot(direction)>=alignment
+        if Root.CFrame.LookVector:Dot(direction)<0.99999999 then
             Root.CFrame=CFrame.lookAt(Root.Position,target)
         end
         local stable=previousGoal==mouth and previousSide==side and previousDirection
-            and previousDirection:Dot(shotDirection)>0.99985
+            and previousDirection:Dot(shotDirection)>=alignment
         previousGoal,previousSide,previousDirection=mouth,side,shotDirection
         -- A rush can overwrite facing between frames. Don't count our own
         -- correction as evidence that the game has stopped overriding it.
