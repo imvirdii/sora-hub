@@ -562,7 +562,7 @@ local Session = { Alive = true, Connections = {} }
 Env.SoraHubSession = Session
 local State = {
     AutoTrap = false, AutoTackle = false, TDImmunity = false, AutoDribble=false, DribbleRange=15,
-    AutoTD = false, TDRange = 8, TDPrediction = 0.12, TDAdaptive=true, TDHold=0.4, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true,
+    AutoTD = false, TDRange = 8, TDPrediction = 0.12, TDAdaptive=true, TDHold=0.4, AutoM2 = false, AutoAim = false, ShootAfterAimed = false, AimAllowed = true, AutoBike = true, GoalBarrierBypass = false,
     AutoPosition = false, Team = 1, Position = 'Forward', AutoFarm = false,
     BallPrediction=false, BallETA=false, ReboundAlert=false, PassReception=false, OffscreenBall=false, OpponentCooldowns=false, OpponentReady=false, HighlightTDs=false, CooldownRange=80,
     SpeedDemon = true, SpeedBoost = 0.75, LockFOV = false, FOV = 85, CanonKaiser=true,
@@ -570,6 +570,24 @@ local State = {
 local Character, Root, Humanoid
 local speedConnection, speedBase, speedWritten
 local pendingPlayer, pendingAt, bikeArmed = nil, 0, false
+local goalBarrierStates={}
+local function setGoalBarrierBypass(enabled)
+    local field=workspace:FindFirstChild('GameField')
+    local folder=field and field:FindFirstChild('GKBarriers')
+    if not folder then return end
+    for _,object in ipairs(folder:GetDescendants()) do
+        if object:IsA('BasePart') and object.Name=='Barrier' then
+            if goalBarrierStates[object]==nil then goalBarrierStates[object]=object.CanCollide end
+            object.CanCollide=enabled and false or goalBarrierStates[object]
+        end
+    end
+end
+local function restoreGoalBarriers()
+    for object,state in pairs(goalBarrierStates) do
+        if object and object.Parent then object.CanCollide=state end
+    end
+    table.clear(goalBarrierStates)
+end
 local aimStep
 local lastTrap, lastBikeTrap, lastRush, lastTackle, lastM2 = -math.huge, -math.huge, -math.huge, -math.huge, -math.huge
 local lastAutoTD,tdFacingUntil,tdTarget=-math.huge,0,nil
@@ -799,6 +817,9 @@ Options.SoraDribbleRange:OnChanged(function() State.DribbleRange=Options.SoraDri
 toggle(Attack, 'AutoBike', 'Auto Bike', 'F1', function()
     bikeArmed=false
 end)
+toggle(Attack,'GoalBarrierBypass','Goal Barrier Bypass',nil,function(enabled)
+    setGoalBarrierBypass(enabled)
+end,'Disables local collision on the invisible goal-box barrier parts so movement skills can pass through them.')
 toggle(Attack,'CanonKaiser','Canon Kaiser',nil,updateCanonKaiser)
 toggle(Attack, 'AutoAim', 'Auto Aim', 'Space', function(enabled)
     if enabled and not State.AimAllowed then Toggles.SoraAutoAim:SetValue(false) end
@@ -2686,6 +2707,7 @@ local function cleanup()
     if speedConnection then speedConnection:Disconnect() end
     if cameraConnection then cameraConnection:Disconnect() end
     restoreSpeed()
+    restoreGoalBarriers()
     releaseRotation()
     if camera and originalFOV and State.LockFOV then camera.FieldOfView = originalFOV end
     if shaker and shaker.Update == noShake then shaker.Update = oldShake end
