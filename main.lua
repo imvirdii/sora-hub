@@ -1424,7 +1424,7 @@ do
         local extra=math.min(1.5,range/400)
         margin=margin+extra
         -- Keep the camera's maximum aim visibly below the underside of the bar.
-        local ceiling=bar.Position.Y-halfHeight-math.max(3.5+extra,margin)
+        local ceiling=bar.Position.Y-halfHeight-math.max(3.5+extra,margin)-0.5
         local width=math.max(0,mouth.Size.Z*0.5-margin)
         local corner=mouth.CFrame:PointToWorldSpace(Vector3.new(0,0,side*width))
         local target=Vector3.new(corner.X,Root.Position.Y,corner.Z)
