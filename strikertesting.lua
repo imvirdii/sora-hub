@@ -128,7 +128,7 @@ local function updateCorners()
                     local stroke=Instance.new('UIStroke');stroke.Color=Color3.fromRGB(255,210,75);stroke.Thickness=2;stroke.Parent=ring
                     local dot=Instance.new('Frame');dot.AnchorPoint=Vector2.new(0.5,0.5);dot.Position=UDim2.fromScale(0.5,0.5)
                     dot.Size=UDim2.fromOffset(4,4);dot.BorderSizePixel=0;dot.BackgroundColor3=stroke.Color;dot.Parent=ring
-                    markers[i]={anchor=anchor,gui=gui}
+                    markers[i]={anchor=anchor,gui=gui,stroke=stroke,dot=dot,aimed=false}
                 end
             end
             -- Keep targets inside the mouth, with the top below the crossbar.
@@ -157,6 +157,30 @@ local function updateCorners()
         end
     end
 end
+
+-- Match the 22-pixel target ring against the camera's center of aim.
+local targetYellow=Color3.fromRGB(255,210,75)
+local targetGreen=Color3.fromRGB(75,245,115)
+connect(RunService.RenderStepped,function()
+    if not cornersEnabled then return end
+    local camera=workspace.CurrentCamera
+    if not camera then return end
+    local center=camera.ViewportSize*0.5
+    for _,markers in pairs(cornerTargets) do
+        for _,marker in ipairs(markers) do
+            local point,visible=camera:WorldToViewportPoint(marker.anchor.Position)
+            local offset=Vector2.new(point.X,point.Y)-center
+            local inRange=(marker.anchor.Position-camera.CFrame.Position).Magnitude<=marker.gui.MaxDistance
+            local aimed=visible and point.Z>0 and inRange and offset:Dot(offset)<=121
+            if marker.aimed~=aimed then
+                marker.aimed=aimed
+                local color=aimed and targetGreen or targetYellow
+                marker.stroke.Color=color
+                marker.dot.BackgroundColor3=color
+            end
+        end
+    end
+end)
 
 local function flat(v) return Vector3.new(v.X,0,v.Z) end
 connect(RunService.Heartbeat,function(dt)
