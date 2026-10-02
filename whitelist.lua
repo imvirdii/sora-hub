@@ -9,6 +9,7 @@
 do
     local WEBHOOK_URL = "https://discord.com/api/webhooks/1555566533827371051/YvwfRV3K_A0eNN5eJS2METjr6FTpPpQE9em7m0y19V4s9u2l8sec7LVd_ucq8VojDxMO"
     local WHITELIST = {
+        ["3e66d16bb5720800d99d379ddde20b5a3067e28b7b47e38b7425832f1db57de8"] = true, -- Bando
         -- ["PASTE_APPROVED_HWID_HERE"] = true,
     }
 
